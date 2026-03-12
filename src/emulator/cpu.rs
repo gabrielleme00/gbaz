@@ -6,8 +6,8 @@ use std::{cell::RefCell, rc::Rc};
 
 use super::bus::Bus;
 
-use arm::{ARM_TABLE_SIZE, ArmHandler, disasm::disasm_arm, generate_arm_table};
-use thumb::{THUMB_TABLE_SIZE, ThumbHandler, disasm::disasm_thumb, generate_thumb_table};
+use arm::{ARM_TABLE_SIZE, ArmHandler, disasm_arm, generate_arm_table};
+use thumb::{THUMB_TABLE_SIZE, ThumbHandler, disasm_thumb, generate_thumb_table};
 
 // CPSR flag bit positions
 const FLAG_N: u32 = 1 << 31;
@@ -56,6 +56,16 @@ impl PipeWord {
     const EMPTY: Self = Self { addr: 0, raw: 0 };
 }
 
+/// Banked registers for privileged modes. Each field is used for the appropriate mode(s).
+#[derive(Default)]
+struct Bank<T> {
+    pub fiq: T,
+    pub irq: T,
+    pub svc: T,
+    pub abt: T,
+    pub und: T,
+}
+
 /// ARM7TDMI CPU with a 3-stage (fetch / decode / execute) pipeline model.
 pub struct Cpu {
     /// Shared reference to the system bus for memory access.
@@ -66,11 +76,7 @@ pub struct Cpu {
     /// Current Program Status Register.
     cpsr: u32,
     /// Saved Program Status Registers for privileged modes.
-    spsr_fiq: u32,
-    spsr_irq: u32,
-    spsr_svc: u32,
-    spsr_abt: u32,
-    spsr_und: u32,
+    spsr: Bank<u32>,
     /// User/System bank for R8-R12 (shared by all non-FIQ modes).
     bank_usr_r8_12: [u32; 5],
     /// FIQ bank for R8-R12.
@@ -109,11 +115,7 @@ impl Cpu {
             bus,
             regs: [0; GPREG_COUNT],
             cpsr: POST_BIOS_CPSR,
-            spsr_fiq: 0,
-            spsr_irq: 0,
-            spsr_svc: 0,
-            spsr_abt: 0,
-            spsr_und: 0,
+            spsr: Bank::default(),
             bank_usr_r8_12: [0; 5],
             bank_fiq_r8_12: [0; 5],
             bank_usr_r13_14: [0; 2],
@@ -141,11 +143,7 @@ impl Cpu {
     pub fn reset(&mut self) {
         self.regs = [0; GPREG_COUNT];
         self.cpsr = POST_BIOS_CPSR;
-        self.spsr_fiq = 0;
-        self.spsr_irq = 0;
-        self.spsr_svc = 0;
-        self.spsr_abt = 0;
-        self.spsr_und = 0;
+        self.spsr = Bank::default();
         self.bank_usr_r8_12 = [0; 5];
         self.bank_fiq_r8_12 = [0; 5];
         self.bank_usr_r13_14 = [0; 2];
@@ -246,7 +244,7 @@ impl Cpu {
         // Switch to IRQ mode, clear Thumb, disable further IRQs.
         let new_cpsr = (saved_cpsr & !(CPSR_MODE_MASK | THUMB_BIT)) | MODE_IRQ | IRQ_DISABLE_BIT;
         self.set_cpsr(new_cpsr); // saves/restores banked registers
-        self.spsr_irq = saved_cpsr;
+        self.spsr.irq = saved_cpsr;
         self.regs[REG_LR] = return_addr;
         self.branch_to(IRQ_VECTOR);
         4
@@ -385,11 +383,11 @@ impl Cpu {
     /// Returns SPSR of the current mode if one exists.
     pub fn spsr(&self) -> u32 {
         match self.cpsr & CPSR_MODE_MASK {
-            MODE_FIQ => self.spsr_fiq,
-            MODE_IRQ => self.spsr_irq,
-            MODE_SVC => self.spsr_svc,
-            MODE_ABT => self.spsr_abt,
-            MODE_UND => self.spsr_und,
+            MODE_FIQ => self.spsr.fiq,
+            MODE_IRQ => self.spsr.irq,
+            MODE_SVC => self.spsr.svc,
+            MODE_ABT => self.spsr.abt,
+            MODE_UND => self.spsr.und,
             _ => self.cpsr,
         }
     }
@@ -397,11 +395,11 @@ impl Cpu {
     /// Writes SPSR of the current mode if one exists.
     pub fn set_spsr(&mut self, value: u32) {
         match self.cpsr & CPSR_MODE_MASK {
-            MODE_FIQ => self.spsr_fiq = value,
-            MODE_IRQ => self.spsr_irq = value,
-            MODE_SVC => self.spsr_svc = value,
-            MODE_ABT => self.spsr_abt = value,
-            MODE_UND => self.spsr_und = value,
+            MODE_FIQ => self.spsr.fiq = value,
+            MODE_IRQ => self.spsr.irq = value,
+            MODE_SVC => self.spsr.svc = value,
+            MODE_ABT => self.spsr.abt = value,
+            MODE_UND => self.spsr.und = value,
             _ => {}
         }
     }
