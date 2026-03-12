@@ -1,0 +1,8 @@
+[package]
+name = "gbaz"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitfield = "0.19.4"
+minifb = "0.28.0"
