@@ -1,4 +1,3 @@
-
 pub mod handlers {
     use core::panic;
 
@@ -10,8 +9,8 @@ pub mod handlers {
     }
 
     /// Handler for the SWI (Software Interrupt) instruction, which triggers a software interrupt.
-    pub fn thumb_software_interrupt(_cpu: &mut Cpu, _opcode: u16) -> u32 {
-        0
+    pub fn thumb_software_interrupt(cpu: &mut Cpu, _opcode: u16) -> u32 {
+        cpu.enter_svc()
     }
 
     /// Handler for the B (Unconditional Branch) instruction, which performs an unconditional
@@ -34,8 +33,7 @@ pub mod handlers {
         // Perform the jump
         cpu.branch_to(target);
 
-        // 2S + 1N cycles
-        1
+        0 // fetch cost comes from refill_pipeline via branch_to
     }
 
     /// Handler for the B<cond> (Conditional Branch) instruction, which conditionally
@@ -53,9 +51,9 @@ pub mod handlers {
 
             cpu.branch_to(target);
 
-            2 // 2S + 1N cycles
+            0 // fetch cost comes from refill_pipeline
         } else {
-            1 // 1S cycle
+            0 // not taken: only the S fetch (from advance_pipeline) counts
         }
     }
 
@@ -162,7 +160,7 @@ pub mod handlers {
             // Jump to target and flush pipeline
             cpu.branch_to(target);
 
-            1 // 2S + 1N cycles (Total logic: the bus/system handles timing)
+            0 // fetch cost comes from refill_pipeline via branch_to
         }
     }
 
@@ -183,7 +181,7 @@ pub mod handlers {
 
         cpu.set_reg(13, new_sp);
 
-        1 // Executes in 1S cycle
+        0 // pure ALU, no extra cycles beyond the S fetch
     }
 
     /// Handler for the PUSH/POP instruction, which pushes or pops multiple registers to/from the stack.
@@ -320,7 +318,7 @@ pub mod handlers {
         cpu.set_nz_from_u32(base.wrapping_add(val));
         // This instruction does not affect Carry or Overflow
 
-        1 // Executes in 1 cycle
+        0 // pure ALU, no extra cycles
     }
 
     /// Handler for the Load/Store with Immediate Offset instructions (LDR/STR/LDRB/STRB with immediate offset).
@@ -540,7 +538,9 @@ pub mod handlers {
             _ => unreachable!(),
         }
 
-        1 // Typically 1 cycle, BX/Branch adds internal cycles via flush
+        // If branch_to was called (BX or R15 dest), cost is in pending_fetch_cycles.
+        // For non-branching ops (CMP, ADD/MOV to Lo regs) there are also no extra cycles.
+        0
     }
 
     pub fn thumb_alu_operations(cpu: &mut Cpu, opcode: u16) -> u32 {
@@ -682,13 +682,22 @@ pub mod handlers {
                 cpu.set_nz_from_u32(res);
             }
             0xD => {
-                // MUL
+                // MUL — charges mI extra cycles (same byte-group rule as ARM MUL)
                 let res = val_rd.wrapping_mul(val_rs);
                 cpu.set_reg(rd_idx, res);
                 cpu.set_nz_from_u32(res);
-                // On ARM7TDMI (ARMv4), Carry is "destroyed" (corrupted).
-                // Most emulators just set C=0 or leave as is.
                 cpu.set_c(false);
+                // Return m I-cycles directly; the 1S fetch is from advance_pipeline.
+                let m = if (val_rs & 0xFFFF_FF00) == 0 || (val_rs & 0xFFFF_FF00) == 0xFFFF_FF00 {
+                    1
+                } else if (val_rs & 0xFFFF_0000) == 0 || (val_rs & 0xFFFF_0000) == 0xFFFF_0000 {
+                    2
+                } else if (val_rs & 0xFF00_0000) == 0 || (val_rs & 0xFF00_0000) == 0xFF00_0000 {
+                    3
+                } else {
+                    4
+                };
+                return m;
             }
             0xE => {
                 // BIC
@@ -704,10 +713,9 @@ pub mod handlers {
             }
             _ => unreachable!(),
         }
-        1
+        0 // all non-MUL ALU ops: 0 extra cycles (only the S fetch from advance_pipeline)
     }
 
-    /// Handler for the Move/Compare/Add/Subtract Immediate instruction,
     /// which performs a move, compare, add, or subtract operation with an immediate value.
     pub fn thumb_move_compare_add_subtract_immediate(cpu: &mut Cpu, opcode: u16) -> u32 {
         let op = (opcode >> 11) & 0x3;
@@ -755,7 +763,7 @@ pub mod handlers {
             _ => unreachable!(),
         }
 
-        1 // Executes in 1 cycle
+        0 // pure ALU, no extra cycles
     }
 
     pub fn thumb_add_subtract(cpu: &mut Cpu, opcode: u16) -> u32 {
@@ -793,7 +801,7 @@ pub mod handlers {
             _ => unreachable!(),
         }
 
-        1 // 1S cycle
+        0 // pure ALU, no extra cycles
     }
 
     pub fn thumb_move_shifted_register(cpu: &mut Cpu, opcode: u16) -> u32 {
@@ -843,6 +851,6 @@ pub mod handlers {
         cpu.set_reg(rd_idx, result);
         cpu.set_nzcv_from_u32(result, carry, false);
 
-        1 // 1S cycle
+        0 // pure ALU, no extra cycles
     }
 }

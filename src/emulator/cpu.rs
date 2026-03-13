@@ -4,7 +4,7 @@ mod thumb;
 
 use std::{cell::RefCell, rc::Rc};
 
-use super::bus::Bus;
+use super::bus::{AccessWidth, Bus};
 
 use arm::{ARM_TABLE_SIZE, ArmHandler, disasm_arm, generate_arm_table};
 use thumb::{THUMB_TABLE_SIZE, ThumbHandler, disasm_thumb, generate_thumb_table};
@@ -40,6 +40,7 @@ const POST_BIOS_CPSR: u32 = 0xD3;
 const THUMB_BIT: u32 = 1 << 5;
 const IRQ_DISABLE_BIT: u32 = 1 << 7; // I bit: when set, maskable IRQs are disabled
 const IRQ_VECTOR: u32 = 0x0000_0018;
+const SVC_VECTOR: u32 = 0x0000_0008;
 
 /// A single stage of the instruction pipeline.
 #[derive(Debug, Clone, Copy)]
@@ -98,6 +99,9 @@ pub struct Cpu {
     /// Set to `true` by `refill_pipeline` when a branch or PC-write
     /// flushes and refills the pipeline mid-step.
     pipeline_flushed: bool,
+    /// Cycle cost of the last `refill_pipeline` call (1N + 1S fetches).
+    /// Read by `step()` when `pipeline_flushed` is true.
+    pending_fetch_cycles: u32,
     /// Decode-table of ARM instruction handlers (indexed by 12-bit key).
     arm_table: [ArmHandler; ARM_TABLE_SIZE],
     /// Decode-table of Thumb instruction handlers (indexed by 10-bit key).
@@ -127,6 +131,7 @@ impl Cpu {
             fetch_pc: 0,
             arm_pipe: [PipeWord::EMPTY; 2],
             pipeline_flushed: false,
+            pending_fetch_cycles: 0,
             arm_table: generate_arm_table(),
             thumb_table: generate_thumb_table(),
             disasm_enabled: false,
@@ -168,55 +173,72 @@ impl Cpu {
         self.pipeline_flushed = false;
         self.refill_pipeline(POST_BIOS_PC);
     }
-    
+
     /// Fills both pipeline stages from `addr` and updates `fetch_pc`.
     /// ARM mode fetches 32-bit words from word-aligned addresses.
     /// Thumb mode fetches 16-bit halfwords from halfword-aligned addresses.
     ///
+    /// Charges the bus for two fetches (1N at the target, 1S at target+width)
+    /// and stores the total in `pending_fetch_cycles` for `step()` to collect.
     /// Marks the pipeline as flushed so that
     /// `step` skips the normal advance after the current handler returns.
     fn refill_pipeline(&mut self, addr: u32) {
         if self.is_thumb_mode() {
-            let a = addr & !1; // Ensure halfword (2-byte) alignment
+            let a = addr & !1;
+            let c0 = self.bus.borrow().access_cycles(a, AccessWidth::Half);
             self.arm_pipe[0] = PipeWord {
                 addr: a,
                 raw: self.bus.borrow().read16(a) as u32,
             };
+            let a1 = a + 2;
+            let c1 = self.bus.borrow().access_cycles(a1, AccessWidth::Half);
             self.arm_pipe[1] = PipeWord {
-                addr: a + 2,
-                raw: self.bus.borrow().read16(a + 2) as u32,
+                addr: a1,
+                raw: self.bus.borrow().read16(a1) as u32,
             };
             self.fetch_pc = a + 4;
+            self.pending_fetch_cycles = c0 + c1;
         } else {
-            let a = addr & !3; // Ensure word (4-byte) alignment
+            let a = addr & !3;
+            let c0 = self.bus.borrow().access_cycles(a, AccessWidth::Word);
             self.arm_pipe[0] = PipeWord {
                 addr: a,
                 raw: self.bus.borrow().read32(a),
             };
+            let a1 = a + 4;
+            let c1 = self.bus.borrow().access_cycles(a1, AccessWidth::Word);
             self.arm_pipe[1] = PipeWord {
-                addr: a + 4,
-                raw: self.bus.borrow().read32(a + 4),
+                addr: a1,
+                raw: self.bus.borrow().read32(a1),
             };
             self.fetch_pc = a + 8;
+            self.pending_fetch_cycles = c0 + c1;
         }
         self.pipeline_flushed = true;
     }
 
-    /// Shifts the pipeline forward by one stage and fetches the next opcode.
-    fn advance_pipeline(&mut self) {
+    /// Shifts the pipeline forward by one stage, fetches the next opcode,
+    /// and returns the S-cycle cost of that fetch.
+    fn advance_pipeline(&mut self) -> u32 {
         self.arm_pipe[0] = self.arm_pipe[1];
         if self.is_thumb_mode() {
+            let addr = self.fetch_pc;
+            let cycles = self.bus.borrow().access_cycles(addr, AccessWidth::Half);
             self.arm_pipe[1] = PipeWord {
-                addr: self.fetch_pc,
-                raw: self.bus.borrow().read16(self.fetch_pc) as u32,
+                addr,
+                raw: self.bus.borrow().read16(addr) as u32,
             };
             self.fetch_pc = self.fetch_pc.wrapping_add(2);
+            cycles
         } else {
+            let addr = self.fetch_pc;
+            let cycles = self.bus.borrow().access_cycles(addr, AccessWidth::Word);
             self.arm_pipe[1] = PipeWord {
-                addr: self.fetch_pc,
-                raw: self.bus.borrow().read32(self.fetch_pc),
+                addr,
+                raw: self.bus.borrow().read32(addr),
             };
             self.fetch_pc = self.fetch_pc.wrapping_add(4);
+            cycles
         }
     }
 
@@ -226,6 +248,22 @@ impl Cpu {
     /// (branches, `Rd = 15` data-processing results, etc.).
     pub fn branch_to(&mut self, target: u32) {
         self.refill_pipeline(target);
+    }
+
+    /// Enters SVC (supervisor) exception mode and vectors to `SVC_VECTOR` (0x08).
+    ///
+    /// Used by the SWI instruction. LR_svc is set to the instruction after the SWI
+    /// so the BIOS handler can return with `MOVS PC, LR`.
+    pub fn enter_svc(&mut self) -> u32 {
+        let thumb = self.is_thumb_mode();
+        let return_addr = self.arm_pipe[0].addr + if thumb { 2 } else { 4 };
+        let saved_cpsr = self.cpsr;
+        let new_cpsr = (saved_cpsr & !(CPSR_MODE_MASK | THUMB_BIT)) | MODE_SVC | IRQ_DISABLE_BIT;
+        self.set_cpsr(new_cpsr);
+        self.spsr.svc = saved_cpsr;
+        self.regs[REG_LR] = return_addr;
+        self.branch_to(SVC_VECTOR);
+        4
     }
 
     /// Enters IRQ exception mode and vectors to `IRQ_VECTOR`.
@@ -258,8 +296,19 @@ impl Cpu {
     /// - If the handler called `branch_to` the pipeline was already refilled;
     ///   otherwise we advance it normally.
     pub fn step(&mut self) -> u32 {
+        // HALT mode: stall until IE & IF != 0 (independent of IME and I bit).
+        if self.bus.borrow().io.borrow().halted {
+            if self.bus.borrow().io.borrow().interrupt.irq_asserted() {
+                self.bus.borrow_mut().io.borrow_mut().halted = false;
+                // Fall through: the IRQ check below will dispatch if I bit allows.
+            } else {
+                return 1;
+            }
+        }
+
         // Sample IRQ between instructions (I bit clear = IRQs enabled).
-        if self.cpsr & IRQ_DISABLE_BIT == 0 && self.bus.borrow().io.borrow().interrupt.irq_pending() {
+        if self.cpsr & IRQ_DISABLE_BIT == 0 && self.bus.borrow().io.borrow().interrupt.irq_pending()
+        {
             return self.enter_irq();
         }
 
@@ -281,7 +330,7 @@ impl Cpu {
         };
         self.pipeline_flushed = false;
 
-        let cycles = if thumb_mode {
+        let handler_cycles = if thumb_mode {
             // Thumb
             let opcode = exec.raw as u16;
             let index = Self::thumb_index(opcode);
@@ -294,15 +343,17 @@ impl Cpu {
                 let handler = self.arm_table[index];
                 handler(self, exec.raw)
             } else {
-                1
+                0 // Condition failed: only the pipeline S-fetch counts
             }
         };
 
-        if !self.pipeline_flushed {
-            self.advance_pipeline();
-        }
+        let fetch_cycles = if self.pipeline_flushed {
+            self.pending_fetch_cycles
+        } else {
+            self.advance_pipeline()
+        };
 
-        cycles
+        handler_cycles + fetch_cycles
     }
 
     // Helpers

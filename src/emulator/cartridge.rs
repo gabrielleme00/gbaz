@@ -1,5 +1,3 @@
-const CARTRIDGE_BASE_ADDR: u32 = 0x0800_0000;
-
 /// Raw cartridge ROM container and metadata hooks.
 #[derive(Clone)]
 pub struct Cartridge {
@@ -27,6 +25,8 @@ impl Cartridge {
     }
 
     fn index(addr: u32) -> usize {
-        (addr - CARTRIDGE_BASE_ADDR) as usize
+        // The same ROM data is mirrored across three wait-state windows (WS0/WS1/WS2).
+        // Masking off the upper bits gives the offset within the 32 MB ROM space.
+        (addr & 0x01FF_FFFF) as usize
     }
 }

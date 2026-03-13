@@ -53,7 +53,7 @@ impl Emulator {
         if !has_bios {
             emu.skip_bios();
         }
-        emu.cpu.set_disasm_enabled(true);
+        emu.set_disasm_enabled(false);
         emu
     }
 

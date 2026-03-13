@@ -22,9 +22,9 @@ pub fn signal_irq(flag: &Rc<RefCell<u16>>, irq_bit: Interrupt) {
 }
 
 pub struct InterruptController {
-    enable: u16,         // IE - Interrupt Enable Register
+    enable: u16,            // IE - Interrupt Enable Register
     flag: Rc<RefCell<u16>>, // IF - Interrupt Flag Register
-    master_enable: bool, // IME - Interrupt Master Enable Flag
+    master_enable: bool,    // IME - Interrupt Master Enable Flag
 }
 
 impl InterruptController {
@@ -38,23 +38,23 @@ impl InterruptController {
 
     pub fn read(&self, addr: u32) -> u8 {
         match addr {
-            0x4000_0200 => (self.enable & 0xFF) as u8,
-            0x4000_0201 => (self.enable >> 8) as u8,
-            0x4000_0202 => (*self.flag.borrow() & 0xFF) as u8,
-            0x4000_0203 => (*self.flag.borrow() >> 8) as u8,
-            0x4000_0208 => self.master_enable as u8,
+            0x0400_0200 => (self.enable & 0xFF) as u8,
+            0x0400_0201 => (self.enable >> 8) as u8,
+            0x0400_0202 => (*self.flag.borrow() & 0xFF) as u8,
+            0x0400_0203 => (*self.flag.borrow() >> 8) as u8,
+            0x0400_0208 => self.master_enable as u8,
             _ => 0,
         }
     }
 
     pub fn write(&mut self, addr: u32, value: u8) {
         match addr {
-            0x4000_0200 => self.enable = (self.enable & 0xFF00) | value as u16,
-            0x4000_0201 => self.enable = (self.enable & 0x00FF) | ((value as u16) << 8),
+            0x0400_0200 => self.enable = (self.enable & 0xFF00) | value as u16,
+            0x0400_0201 => self.enable = (self.enable & 0x00FF) | ((value as u16) << 8),
             // IF is write-1-to-clear: writing a 1 acknowledges (clears) that interrupt bit.
-            0x4000_0202 => *self.flag.borrow_mut() &= !(value as u16),
-            0x4000_0203 => *self.flag.borrow_mut() &= !((value as u16) << 8),
-            0x4000_0208 => self.master_enable = value != 0,
+            0x0400_0202 => *self.flag.borrow_mut() &= !(value as u16),
+            0x0400_0203 => *self.flag.borrow_mut() &= !((value as u16) << 8),
+            0x0400_0208 => self.master_enable = value != 0,
             _ => {}
         }
     }
@@ -63,6 +63,13 @@ impl InterruptController {
     /// Requires IME enabled, at least one enabled interrupt flagged, and the
     /// CPU I bit to be clear (checked separately in the CPU).
     pub fn irq_pending(&self) -> bool {
-        self.master_enable && (self.enable & *self.flag.borrow()) != 0
+        self.master_enable && self.irq_asserted()
+    }
+
+    /// Returns true if any enabled interrupt flag is set, regardless of IME
+    /// or the CPU I bit. Used as the HALT wake-up condition (GBA wakes from
+    /// HALT when IE & IF != 0, independent of IME and the I bit).
+    pub fn irq_asserted(&self) -> bool {
+        (self.enable & *self.flag.borrow()) != 0
     }
 }

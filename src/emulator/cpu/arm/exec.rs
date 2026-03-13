@@ -27,7 +27,7 @@ pub mod handlers {
             cpu.branch_to(target_aligned);
         }
 
-        3 // BX instructions typically take 3 cycles
+        0 // fetch cost comes from refill_pipeline via branch_to
     }
 
     /// Handler for block data transfer instructions (LDM, STM).
@@ -162,11 +162,11 @@ pub mod handlers {
             cpu.branch_to(target);
         }
 
-        3 // B/BL instructions typically take 3 cycles
+        0 // fetch cost comes from refill_pipeline via branch_to
     }
 
-    pub fn arm_software_interrupt(_cpu: &mut Cpu, _opcode: u32) -> u32 {
-        0
+    pub fn arm_software_interrupt(cpu: &mut Cpu, _opcode: u32) -> u32 {
+        cpu.enter_svc()
     }
 
     pub fn arm_undefined(_cpu: &mut Cpu, opcode: u32) -> u32 {
@@ -447,7 +447,7 @@ pub mod handlers {
         let value = if use_spsr { cpu.spsr() } else { cpu.cpsr() };
 
         cpu.set_reg(rd, value);
-        1
+        0
     }
 
     /// Handler for MSR instructions that write to CPSR (and optionally SPSR).
@@ -492,7 +492,7 @@ pub mod handlers {
             cpu.set_cpsr(new_cpsr);
         }
 
-        1
+        0
     }
 
     /// Handler for data processing instructions
@@ -569,7 +569,7 @@ pub mod handlers {
                     cpu.set_cpsr(spsr);
                 }
                 cpu.branch_to(result); // PC writes flush/refill pipeline.
-                return 1;
+                return 0; // fetch cost is in pending_fetch_cycles
             } else {
                 cpu.set_reg(rd, result);
             }
@@ -591,8 +591,11 @@ pub mod handlers {
             }
         }
 
-        1
+        // Register-shifted data-processing costs 1 extra I-cycle (barrel-shifter stall).
+        // All other forms are pure S-cycle (0 extra).
+        by_reg_shift as u32
     }
+
 }
 
 mod helpers {
@@ -693,21 +696,21 @@ mod helpers {
         cycles
     }
 
-    /// Gets the cycle count for a long multiply (UMULL/UMLAL/SMULL/SMLAL) based on the value of Rs,
-    /// whether it's an MLA, and whether it's signed.
-    pub fn get_mull_cycles(rs: u32, accumulate: bool, signed: bool) -> u32 {
-        // For long multiplies, the cycle count depends on the value of Rs and whether it's an MLA.
-        // The ARM architecture reference manual provides a formula for this:
-        // Cycles = 1 + (number of bits in Rs that are 1) + (1 if accumulate else 0)
-        let mut cycles = 1 + rs.count_ones();
-        if accumulate {
-            cycles += 1;
-        }
-        if signed && (rs & 0x80000000) != 0 {
-            // If Rs is negative in a signed multiply, it may take an extra cycle.
-            cycles += 1;
-        }
-        cycles
+    /// Gets the cycle count for a long multiply (UMULL/UMLAL/SMULL/SMLAL).
+    ///
+    /// ARM7TDMI TRM: UMULL/SMULL cost 1S+(m+1)I; UMLAL/SMLAL cost 1S+(m+2)I,
+    /// where m is determined by the significant-byte count of Rs (same rule as
+    /// short multiply). Signed and unsigned variants have identical timing.
+    pub fn get_mull_cycles(rs: u32, accumulate: bool, _signed: bool) -> u32 {
+        // Same m-factor as short multiply
+        let m = if (rs & 0xFFFF_FF00) == 0 || (rs & 0xFFFF_FF00) == 0xFFFF_FF00 { 1 }
+                else if (rs & 0xFFFF_0000) == 0 || (rs & 0xFFFF_0000) == 0xFFFF_0000 { 2 }
+                else if (rs & 0xFF00_0000) == 0 || (rs & 0xFF00_0000) == 0xFF00_0000 { 3 }
+                else { 4 };
+
+        // UMULL/SMULL: m+1 I-cycles; UMLAL/SMLAL: m+2 I-cycles.
+        // Return the I-cycle count, consistent with get_mul_cycles convention.
+        m + 1 + if accumulate { 1 } else { 0 }
     }
 
     /// Decodes ARM Operand2 and returns (value, shifter_carry_out).
