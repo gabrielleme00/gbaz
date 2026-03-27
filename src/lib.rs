@@ -4,6 +4,7 @@ extern crate bitfield;
 extern crate bitflags;
 
 pub mod app;
+pub mod config;
 pub mod emulator;
 pub mod utils;
 

@@ -45,7 +45,7 @@ impl Emulator {
         let ppu = Box::new(Ppu::new(interrupt_flags.clone()));
         let apu = Apu::new();
         let dma = Dma::new(interrupt_flags.clone());
-        let timer = Timer::new();
+        let timer = Timer::new(interrupt_flags.clone());
 
         let io_devs = Rc::new(RefCell::new(IoDevices::new(intc, ppu, apu, dma, timer)));
         let bus = Rc::new(RefCell::new(Bus::new(cartridge, io_devs.clone(), bios)));

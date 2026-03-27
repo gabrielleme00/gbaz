@@ -1,5 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
+#[derive(Clone, Copy)]
 pub enum Interrupt {
     VBlank = 1 << 0,
     HBlank = 1 << 1,

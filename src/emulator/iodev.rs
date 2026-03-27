@@ -65,7 +65,7 @@ impl IoDevices {
                 Lcd => self.ppu.read_8(addr),
                 Sound => 0,
                 Dma => self.dma.read_8(addr),
-                Timer => 0,
+                Timer => self.timer.read_8(addr),
                 Keypad => self.input.read_8(addr),
                 Serial => 0,
                 Interrupt => match addr {
@@ -89,7 +89,7 @@ impl IoDevices {
                     _ => 0,
                 },
                 Dma => self.dma.read_16(addr),
-                Timer => 0,
+                Timer => self.timer.read_16(addr),
                 Keypad => self.input.read_16(),
                 Serial => 0,
                 Interrupt => match addr {
@@ -109,7 +109,7 @@ impl IoDevices {
                 Lcd => self.ppu.read_32(addr),
                 Sound => 0,
                 Dma => self.dma.read_32(addr),
-                Timer => 0,
+                Timer => self.timer.read_32(addr),
                 Keypad => self.input.read_32(),
                 Serial => 0,
                 Interrupt => match addr {
@@ -129,7 +129,7 @@ impl IoDevices {
                 Lcd => self.ppu.write_8(addr, value),
                 Sound => {}
                 Dma => self.dma.write_8(addr, value),
-                Timer => {}
+                Timer => self.timer.write_8(addr, value),
                 Keypad => {}
                 Serial => {}
                 Interrupt => match addr {
@@ -148,7 +148,7 @@ impl IoDevices {
                 Lcd => self.ppu.write_16(addr, value),
                 Sound => {}
                 Dma => self.dma.write_16(addr, value),
-                Timer => {}
+                Timer => self.timer.write_16(addr, value),
                 Keypad => {}
                 Serial => {}
                 Interrupt => match addr {
@@ -167,7 +167,7 @@ impl IoDevices {
                 Lcd => self.ppu.write_32(addr, value),
                 Sound => {}
                 Dma => self.dma.write_32(addr, value),
-                Timer => {}
+                Timer => self.timer.write_32(addr, value),
                 Keypad => {}
                 Serial => {}
                 Interrupt => match addr {

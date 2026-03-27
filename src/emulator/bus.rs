@@ -51,6 +51,7 @@ impl Bus {
 
     pub fn tick(&mut self) {
         self.io.borrow_mut().ppu.tick();
+        self.io.borrow_mut().timer.advance(1);
     }
 
     pub fn read_8(&self, addr: u32) -> u8 {
