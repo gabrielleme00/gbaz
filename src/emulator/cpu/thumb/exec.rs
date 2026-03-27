@@ -69,13 +69,13 @@ pub mod handlers {
         // ARM7TDMI quirk: empty rlist loads/stores R15 and increments Rb by 0x40
         if r_list == 0 {
             if is_load {
-                let val = cpu.bus.borrow().read32(addr & !3);
+                let val = cpu.bus.borrow().read_32(addr & !3);
                 cpu.set_reg(rb_idx, addr.wrapping_add(0x40));
                 cpu.branch_to(val);
             } else {
                 // Stores fetch PC (exec_addr + 6 = pc_reg + 2) (quirk)
                 let val = cpu.reg(15).wrapping_add(2);
-                cpu.bus.borrow_mut().write32(addr & !3, val);
+                cpu.bus.borrow_mut().write_32(addr & !3, val);
                 cpu.set_reg(rb_idx, addr.wrapping_add(0x40));
             }
             return 1;
@@ -85,7 +85,7 @@ pub mod handlers {
             // LDMIA
             for i in 0..8 {
                 if (r_list >> i) & 1 == 1 {
-                    let val = cpu.bus.borrow().read32(addr & !3);
+                    let val = cpu.bus.borrow().read_32(addr & !3);
                     cpu.set_reg(i, val);
                     addr = addr.wrapping_add(4);
                     num_registers += 1;
@@ -115,7 +115,7 @@ pub mod handlers {
                     } else {
                         cpu.reg(i)
                     };
-                    cpu.bus.borrow_mut().write32(addr & !3, val);
+                    cpu.bus.borrow_mut().write_32(addr & !3, val);
                     addr = addr.wrapping_add(4);
                     num_registers += 1;
                 }
@@ -203,13 +203,13 @@ pub mod handlers {
         if is_pop {
             // POP (LDMIA style
             for &reg_idx in &registers {
-                let val = cpu.bus.borrow().read32(sp);
+                let val = cpu.bus.borrow().read_32(sp);
                 cpu.set_reg(reg_idx, val);
                 sp = sp.wrapping_add(4);
             }
 
             if extra_bit {
-                let mut target_pc = cpu.bus.borrow().read32(sp);
+                let mut target_pc = cpu.bus.borrow().read_32(sp);
                 // GBA/ARM7TDMI Quirk: POP {PC} forces bit 0 to 0 but stays in Thumb
                 target_pc &= !1;
                 cpu.branch_to(target_pc);
@@ -223,12 +223,12 @@ pub mod handlers {
             let final_sp = start_addr;
 
             for &reg_idx in &registers {
-                cpu.bus.borrow_mut().write32(start_addr, cpu.reg(reg_idx));
+                cpu.bus.borrow_mut().write_32(start_addr, cpu.reg(reg_idx));
                 start_addr = start_addr.wrapping_add(4);
             }
 
             if extra_bit {
-                cpu.bus.borrow_mut().write32(start_addr, cpu.reg(14)); // Push LR
+                cpu.bus.borrow_mut().write_32(start_addr, cpu.reg(14)); // Push LR
             }
 
             sp = final_sp;
@@ -254,10 +254,10 @@ pub mod handlers {
             // LDRH
             let val = if (addr & 1) == 0 {
                 // Aligned read
-                cpu.bus.borrow().read16(addr) as u32
+                cpu.bus.borrow().read_16(addr) as u32
             } else {
                 // Misaligned LDRH: ARM7TDMI rotates the full 32-bit word into Rd (no masking).
-                let word = cpu.bus.borrow().read32(addr & !3);
+                let word = cpu.bus.borrow().read_32(addr & !3);
                 let rotation = (addr & 3) * 8;
                 word.rotate_right(rotation)
             };
@@ -266,7 +266,7 @@ pub mod handlers {
             // STRH
             let val = cpu.reg(rd_idx) as u16;
             // Hardware masks bit 0 for halfword stores
-            cpu.bus.borrow_mut().write16(addr & !1, val);
+            cpu.bus.borrow_mut().write_16(addr & !1, val);
         }
 
         1 // Base cycle count; Bus timing (N/S/I) handled by Bus/System
@@ -284,17 +284,17 @@ pub mod handlers {
         if l_bit {
             // LDR (Word)
             let val = if (addr & 3) == 0 {
-                cpu.bus.borrow().read32(addr)
+                cpu.bus.borrow().read_32(addr)
             } else {
                 // Misaligned LDR: Rotate Right quirk
-                let raw = cpu.bus.borrow().read32(addr & !3);
+                let raw = cpu.bus.borrow().read_32(addr & !3);
                 raw.rotate_right((addr & 3) * 8)
             };
             cpu.set_reg(rd_idx, val);
         } else {
             // STR (Word)
             let val = cpu.reg(rd_idx);
-            cpu.bus.borrow_mut().write32(addr & !3, val);
+            cpu.bus.borrow_mut().write_32(addr & !3, val);
         }
 
         1 // Base cycle count
@@ -315,8 +315,7 @@ pub mod handlers {
         };
 
         cpu.set_reg(rd_idx, base.wrapping_add(val));
-        cpu.set_nz_from_u32(base.wrapping_add(val));
-        // This instruction does not affect Carry or Overflow
+        // Format 12 (Load Address): no flags affected (N, Z, C, V all preserved)
 
         0 // pure ALU, no extra cycles
     }
@@ -335,16 +334,16 @@ pub mod handlers {
                 // STR (Word) - Offset scaled by 4
                 let addr = rb_val.wrapping_add(imm5 << 2);
                 let val = cpu.reg(rd_idx);
-                cpu.bus.borrow_mut().write32(addr & !3, val);
+                cpu.bus.borrow_mut().write_32(addr & !3, val);
             }
             1 => {
                 // LDR (Word) - Offset scaled by 4
                 let addr = rb_val.wrapping_add(imm5 << 2);
                 let val = if (addr & 3) == 0 {
-                    cpu.bus.borrow().read32(addr)
+                    cpu.bus.borrow().read_32(addr)
                 } else {
                     // Misaligned LDR: Rotate Right quirk
-                    let raw = cpu.bus.borrow().read32(addr & !3);
+                    let raw = cpu.bus.borrow().read_32(addr & !3);
                     raw.rotate_right((addr & 3) * 8)
                 };
                 cpu.set_reg(rd_idx, val);
@@ -353,12 +352,12 @@ pub mod handlers {
                 // STRB (Byte) - Offset scaled by 1
                 let addr = rb_val.wrapping_add(imm5);
                 let val = cpu.reg(rd_idx) as u8;
-                cpu.bus.borrow_mut().write8(addr, val);
+                cpu.bus.borrow_mut().write_8(addr, val);
             }
             3 => {
                 // LDRB (Byte) - Offset scaled by 1
                 let addr = rb_val.wrapping_add(imm5);
-                let val = cpu.bus.borrow().read8(addr) as u32;
+                let val = cpu.bus.borrow().read_8(addr) as u32;
                 cpu.set_reg(rd_idx, val);
             }
             _ => unreachable!(),
@@ -380,27 +379,27 @@ pub mod handlers {
             0 => {
                 // STR (Word)
                 let val = cpu.reg(rd_idx);
-                cpu.bus.borrow_mut().write32(addr & !3, val);
+                cpu.bus.borrow_mut().write_32(addr & !3, val);
             }
             1 => {
                 // STRB (Byte)
                 let val = cpu.reg(rd_idx) as u8;
-                cpu.bus.borrow_mut().write8(addr, val);
+                cpu.bus.borrow_mut().write_8(addr, val);
             }
             2 => {
                 // LDR (Word)
                 let val = if (addr & 3) == 0 {
-                    cpu.bus.borrow().read32(addr)
+                    cpu.bus.borrow().read_32(addr)
                 } else {
                     // Misaligned LDR: Rotate Right quirk
-                    let raw = cpu.bus.borrow().read32(addr & !3);
+                    let raw = cpu.bus.borrow().read_32(addr & !3);
                     raw.rotate_right((addr & 3) * 8)
                 };
                 cpu.set_reg(rd_idx, val);
             }
             3 => {
                 // LDRB (Byte)
-                let val = cpu.bus.borrow().read8(addr) as u32;
+                let val = cpu.bus.borrow().read_8(addr) as u32;
                 cpu.set_reg(rd_idx, val);
             }
             _ => unreachable!(),
@@ -423,20 +422,20 @@ pub mod handlers {
             0 => {
                 // STRH (Store Halfword)
                 let val = cpu.reg(rd_idx) as u16;
-                cpu.bus.borrow_mut().write16(addr & !1, val);
+                cpu.bus.borrow_mut().write_16(addr & !1, val);
             }
             1 => {
                 // LDSB (Load Sign-extended Byte)
-                let val = cpu.bus.borrow().read8(addr) as i8 as i32 as u32;
+                let val = cpu.bus.borrow().read_8(addr) as i8 as i32 as u32;
                 cpu.set_reg(rd_idx, val);
             }
             2 => {
                 // LDRH (Load Zero-extended Halfword)
                 let val = if (addr & 1) == 0 {
-                    cpu.bus.borrow().read16(addr) as u32
+                    cpu.bus.borrow().read_16(addr) as u32
                 } else {
                     // Misaligned LDRH: ARM7TDMI rotates the full 32-bit word into Rd (no masking).
-                    let raw = cpu.bus.borrow().read32(addr & !3);
+                    let raw = cpu.bus.borrow().read_32(addr & !3);
                     raw.rotate_right((addr & 3) * 8)
                 };
                 cpu.set_reg(rd_idx, val);
@@ -444,11 +443,11 @@ pub mod handlers {
             3 => {
                 // LDSH (Load Sign-extended Halfword)
                 if (addr & 1) == 0 {
-                    let val = cpu.bus.borrow().read16(addr) as i16 as i32 as u32;
+                    let val = cpu.bus.borrow().read_16(addr) as i16 as i32 as u32;
                     cpu.set_reg(rd_idx, val);
                 } else {
                     // Misaligned LDSH behaves like LDSB on ARM7TDMI
-                    let val = cpu.bus.borrow().read8(addr) as i8 as i32 as u32;
+                    let val = cpu.bus.borrow().read_8(addr) as i8 as i32 as u32;
                     cpu.set_reg(rd_idx, val);
                 }
             }
@@ -470,7 +469,7 @@ pub mod handlers {
         let addr = pc_base.wrapping_add(offset);
 
         // Load 32-bit word from the literal pool
-        let val = cpu.bus.borrow().read32(addr & !3);
+        let val = cpu.bus.borrow().read_32(addr & !3);
         cpu.set_reg(rd_idx, val);
 
         // 1S + 1N + 1I cycles
@@ -502,16 +501,16 @@ pub mod handlers {
                 }
             }
             0b01 => {
-                // CMP
+                // CMP: set flags from Rd - Rs, discard result.
                 let val_rs = cpu.reg(rs_idx);
                 let val_rd = cpu.reg(rd_idx);
-                let (result, overflow) = val_rd.overflowing_sub(val_rs);
+                let result = val_rd.wrapping_sub(val_rs);
 
                 // CMP always updates flags based on the subtraction
                 let z = result == 0;
                 let n = (result >> 31) != 0;
                 let c = val_rd >= val_rs;
-                let v = overflow;
+                let v = ((val_rd ^ val_rs) & (val_rd ^ result) & 0x8000_0000) != 0;
                 cpu.set_nzcv(n, z, c, v);
             }
             0b10 => {
@@ -682,7 +681,7 @@ pub mod handlers {
                 cpu.set_nz_from_u32(res);
             }
             0xD => {
-                // MUL — charges mI extra cycles (same byte-group rule as ARM MUL)
+                // MUL - charges mI extra cycles (same byte-group rule as ARM MUL)
                 let res = val_rd.wrapping_mul(val_rs);
                 cpu.set_reg(rd_idx, res);
                 cpu.set_nz_from_u32(res);
@@ -811,45 +810,46 @@ pub mod handlers {
         let rd_idx = (opcode & 0x7) as usize;
 
         let val = cpu.reg(rs_idx);
+        let mut carry = cpu.get_c();
 
-        let (result, carry) = match op {
+        let result = match op {
             0b00 => {
                 // LSL
                 if offset == 0 {
                     // LSL #0: No change to Carry flag
-                    (val, cpu.get_c())
+                    val
                 } else {
-                    (val << offset, (val >> (32 - offset)) & 1 != 0)
+                    carry = (val >> (32 - offset)) & 1 != 0;
+                    val << offset
                 }
             }
             0b01 => {
                 // LSR
                 if offset == 0 {
-                    // LSR #0 is interpreted as LSR #32
-                    (0, (val >> 31) & 1 != 0)
+                    carry = (val >> 31) & 1 != 0;
+                    0
                 } else {
-                    (val >> offset, (val >> (offset - 1)) & 1 != 0)
+                    carry = (val >> (offset - 1)) & 1 != 0;
+                    val >> offset
                 }
             }
             0b10 => {
                 // ASR
                 if offset == 0 {
-                    // ASR #0 is interpreted as ASR #32
-                    if (val as i32) < 0 {
-                        (0xFFFF_FFFF, (val >> 31) & 1 != 0)
-                    } else {
-                        (0, (val >> 31) & 1 != 0)
-                    }
+                    carry = (val >> 31) & 1 != 0;
+                    if (val as i32) < 0 { 0xFFFF_FFFF } else { 0 }
                 } else {
-                    let res = ((val as i32) >> offset) as u32;
-                    (res, (val >> (offset - 1)) & 1 != 0)
+                    carry = (val >> (offset - 1)) & 1 != 0;
+                    ((val as i32) >> offset) as u32
                 }
             }
             _ => unreachable!("Handled by add/sub decoder"),
         };
 
         cpu.set_reg(rd_idx, result);
-        cpu.set_nzcv_from_u32(result, carry, false);
+        // V flag is unaffected by shift instructions (ARM7TDMI spec Format 1)
+        cpu.set_nz_from_u32(result);
+        cpu.set_c(carry);
 
         0 // pure ALU, no extra cycles
     }

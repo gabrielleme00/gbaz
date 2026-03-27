@@ -220,6 +220,7 @@ name = "gbaz"
 version = "0.1.0"
 dependencies = [
  "bitfield",
+ "bitflags 2.11.0",
  "minifb",
 ]
 

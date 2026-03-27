@@ -188,13 +188,13 @@ impl Cpu {
             let c0 = self.bus.borrow().access_cycles(a, AccessWidth::Half);
             self.arm_pipe[0] = PipeWord {
                 addr: a,
-                raw: self.bus.borrow().read16(a) as u32,
+                raw: self.bus.borrow().read_16(a) as u32,
             };
             let a1 = a + 2;
             let c1 = self.bus.borrow().access_cycles(a1, AccessWidth::Half);
             self.arm_pipe[1] = PipeWord {
                 addr: a1,
-                raw: self.bus.borrow().read16(a1) as u32,
+                raw: self.bus.borrow().read_16(a1) as u32,
             };
             self.fetch_pc = a + 4;
             self.pending_fetch_cycles = c0 + c1;
@@ -203,13 +203,13 @@ impl Cpu {
             let c0 = self.bus.borrow().access_cycles(a, AccessWidth::Word);
             self.arm_pipe[0] = PipeWord {
                 addr: a,
-                raw: self.bus.borrow().read32(a),
+                raw: self.bus.borrow().read_32(a),
             };
             let a1 = a + 4;
             let c1 = self.bus.borrow().access_cycles(a1, AccessWidth::Word);
             self.arm_pipe[1] = PipeWord {
                 addr: a1,
-                raw: self.bus.borrow().read32(a1),
+                raw: self.bus.borrow().read_32(a1),
             };
             self.fetch_pc = a + 8;
             self.pending_fetch_cycles = c0 + c1;
@@ -226,7 +226,7 @@ impl Cpu {
             let cycles = self.bus.borrow().access_cycles(addr, AccessWidth::Half);
             self.arm_pipe[1] = PipeWord {
                 addr,
-                raw: self.bus.borrow().read16(addr) as u32,
+                raw: self.bus.borrow().read_16(addr) as u32,
             };
             self.fetch_pc = self.fetch_pc.wrapping_add(2);
             cycles
@@ -235,7 +235,7 @@ impl Cpu {
             let cycles = self.bus.borrow().access_cycles(addr, AccessWidth::Word);
             self.arm_pipe[1] = PipeWord {
                 addr,
-                raw: self.bus.borrow().read32(addr),
+                raw: self.bus.borrow().read_32(addr),
             };
             self.fetch_pc = self.fetch_pc.wrapping_add(4);
             cycles
@@ -316,11 +316,12 @@ impl Cpu {
         let thumb_mode = self.is_thumb_mode();
 
         if self.disasm_enabled {
-            if thumb_mode {
-                println!("{}", disasm_thumb(exec.addr, exec.raw as u16));
+            let instr = if thumb_mode {
+                format!("{}", disasm_thumb(exec.addr, exec.raw as u16))
             } else {
-                println!("{}", disasm_arm(exec.addr, exec.raw));
-            }
+                format!("{}", disasm_arm(exec.addr, exec.raw))
+            };
+            println!("{:08X?} | {} | {}", self.regs, self.flags_to_string(), instr);
         }
 
         self.regs[REG_PC] = if thumb_mode {
@@ -589,22 +590,43 @@ impl Cpu {
         (self.cpsr & FLAG_V) != 0
     }
 
+    fn flags_to_string(&self) -> String {
+        let n = if (self.cpsr & FLAG_N) != 0 { 'N' } else { 'n' };
+        let z = if (self.cpsr & FLAG_Z) != 0 { 'Z' } else { 'z' };
+        let c = if (self.cpsr & FLAG_C) != 0 { 'C' } else { 'c' };
+        let v = if (self.cpsr & FLAG_V) != 0 { 'V' } else { 'v' };
+        format!("{n}{z}{c}{v}")
+    }
+
     /// Sets the N, Z, C, V flags in CPSR according to the provided boolean values.
     pub fn set_nzcv(&mut self, n: bool, z: bool, c: bool, v: bool) {
         let mut cpsr = self.cpsr;
         cpsr &= !0xF000_0000;
+
         if n {
             cpsr |= FLAG_N;
+        } else {
+            cpsr &= !FLAG_N;
         }
+
         if z {
             cpsr |= FLAG_Z;
+        } else {
+            cpsr &= !FLAG_Z;
         }
+
         if c {
             cpsr |= FLAG_C;
+        } else {
+            cpsr &= !FLAG_C;
         }
+
         if v {
             cpsr |= FLAG_V;
+        } else {
+            cpsr &= !FLAG_V;
         }
+
         self.cpsr = cpsr;
     }
 

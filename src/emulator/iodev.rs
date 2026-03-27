@@ -1,5 +1,7 @@
+use crate::utils::*;
+
 use super::bus::regions::IoRegisterRegion;
-use super::{Apu, InterruptController, Ppu, Timer};
+use super::{Apu, InputState, InterruptController, Ppu, Timer, Dma};
 use bitfield::bitfield;
 
 const SRAM_CYCLES: [u32; 4] = [4, 3, 2, 8];
@@ -26,44 +28,50 @@ bitfield!(
 );
 
 pub struct IoDevices {
-    // Modules
     pub interrupt: InterruptController,
+
+    // Modules
     pub ppu: Box<Ppu>,
     pub apu: Apu,
+    pub dma: Dma,
     pub timer: Timer,
 
     // Registers
     waitcnt: WaitCnt,
     /// Set by HALTCNT writes; cleared when an IRQ wakes the CPU.
     pub halted: bool,
+    /// Current button state, updated each frame by the frontend.
+    pub input: InputState,
 }
 
 impl IoDevices {
-    pub fn new(interrupt: InterruptController, ppu: Box<Ppu>, apu: Apu, timer: Timer) -> Self {
+    pub fn new(interrupt: InterruptController, ppu: Box<Ppu>, apu: Apu, dma: Dma, timer: Timer) -> Self {
         Self {
             interrupt,
             ppu,
+            dma,
             apu,
             timer,
             waitcnt: WaitCnt(0),
             halted: false,
+            input: InputState::default(),
         }
     }
 
-    pub fn read8(&self, addr: u32) -> u8 {
+    pub fn read_8(&self, addr: u32) -> u8 {
         if let Some(region) = IoRegisterRegion::from_addr(addr) {
             use IoRegisterRegion::*;
             match region {
-                Lcd => self.ppu.read8(addr),
+                Lcd => self.ppu.read_8(addr),
                 Sound => 0,
-                Dma => 0,
+                Dma => self.dma.read_8(addr),
                 Timer => 0,
-                Keypad => 0,
+                Keypad => self.input.read_8(addr),
                 Serial => 0,
                 Interrupt => match addr {
-                    0x0400_0204 => (self.waitcnt.0 & 0xFF) as u8,
-                    0x0400_0205 => (self.waitcnt.0 >> 8) as u8,
-                    _ => self.interrupt.read(addr),
+                    0x0400_0204 => get_lo(self.waitcnt.0),
+                    0x0400_0205 => get_hi(self.waitcnt.0),
+                    _ => self.interrupt.read_8(addr),
                 },
             }
         } else {
@@ -71,31 +79,103 @@ impl IoDevices {
         }
     }
 
-    pub fn write8(&mut self, addr: u32, value: u8) {
+    pub fn read_16(&self, addr: u32) -> u16 {
         if let Some(region) = IoRegisterRegion::from_addr(addr) {
             use IoRegisterRegion::*;
             match region {
-                Lcd => self.ppu.write8(addr, value),
+                Lcd => self.ppu.read_16(addr),
+                Sound => match addr {
+                    0x0400_0088 => 0x200, // SOUNDBIAS
+                    _ => 0,
+                },
+                Dma => self.dma.read_16(addr),
+                Timer => 0,
+                Keypad => self.input.read_16(),
+                Serial => 0,
+                Interrupt => match addr {
+                    0x0400_0204 => get_lo(self.waitcnt.0) as u16 | ((get_hi(self.waitcnt.0) as u16) << 8),
+                    _ => self.interrupt.read_16(addr),
+                },
+            }
+        } else {
+            0
+        }
+    }
+
+    pub fn read_32(&self, addr: u32) -> u32 {
+        if let Some(region) = IoRegisterRegion::from_addr(addr) {
+            use IoRegisterRegion::*;
+            match region {
+                Lcd => self.ppu.read_32(addr),
+                Sound => 0,
+                Dma => self.dma.read_32(addr),
+                Timer => 0,
+                Keypad => self.input.read_32(),
+                Serial => 0,
+                Interrupt => match addr {
+                    0x0400_0204 => self.waitcnt.0 as u32,
+                    _ => self.interrupt.read_32(addr),
+                },
+            }
+        } else {
+            0
+        }
+    }
+
+    pub fn write_8(&mut self, addr: u32, value: u8) {
+        if let Some(region) = IoRegisterRegion::from_addr(addr) {
+            use IoRegisterRegion::*;
+            match region {
+                Lcd => self.ppu.write_8(addr, value),
                 Sound => {}
-                Dma => {}
+                Dma => self.dma.write_8(addr, value),
                 Timer => {}
-                Keypad => {} // KEYINPUT is read-only hardware
+                Keypad => {}
                 Serial => {}
                 Interrupt => match addr {
-                    0x0400_0204 => self.waitcnt.0 = (self.waitcnt.0 & 0xFF00) | value as u16,
-                    0x0400_0205 => self.waitcnt.0 = (self.waitcnt.0 & 0x00FF) | (value as u16) << 8,
-                    0x0400_0300 => {} // POSTFLG (read-only in practice)
-                    0x0400_0301 => self.halted = true, // HALTCNT: any write halts the CPU
-                    _ => self.interrupt.write(addr, value),
+                    0x0400_0204 => set_lo(&mut self.waitcnt.0, value),
+                    0x0400_0205 => set_hi(&mut self.waitcnt.0, value),
+                    _ => self.interrupt.write_8(addr, value),
                 },
             }
         }
     }
 
-    pub fn read16(&self, addr: u32) -> u16 {
-        let low = self.read8(addr) as u16;
-        let high = self.read8(addr + 1) as u16;
-        (high << 8) | low
+    pub fn write_16(&mut self, addr: u32, value: u16) {
+        if let Some(region) = IoRegisterRegion::from_addr(addr) {
+            use IoRegisterRegion::*;
+            match region {
+                Lcd => self.ppu.write_16(addr, value),
+                Sound => {}
+                Dma => self.dma.write_16(addr, value),
+                Timer => {}
+                Keypad => {}
+                Serial => {}
+                Interrupt => match addr {
+                    0x0400_0204 => set_lo(&mut self.waitcnt.0, value as u8),
+                    0x0400_0205 => set_hi(&mut self.waitcnt.0, (value >> 8) as u8),
+                    _ => self.interrupt.write_16(addr, value),
+                },
+            }
+        }
+    }
+
+    pub fn write_32(&mut self, addr: u32, value: u32) {
+        if let Some(region) = IoRegisterRegion::from_addr(addr) {
+            use IoRegisterRegion::*;
+            match region {
+                Lcd => self.ppu.write_32(addr, value),
+                Sound => {}
+                Dma => self.dma.write_32(addr, value),
+                Timer => {}
+                Keypad => {}
+                Serial => {}
+                Interrupt => match addr {
+                    0x0400_0204 => self.waitcnt.0 = value as u16,
+                    _ => self.interrupt.write_32(addr, value),
+                },
+            }
+        }
     }
 }
 

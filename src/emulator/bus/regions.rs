@@ -1,10 +1,17 @@
+pub mod consts {
+    pub const EWRAM_ADDR: u32 = 0x0200_0000;
+    pub const IWRAM_ADDR: u32 = 0x0300_0000;
+    pub const PRAM_ADDR: u32 = 0x0500_0000;
+    pub const VRAM_ADDR: u32 = 0x0600_0000;
+}
+
 #[derive(Debug)]
 pub enum MemoryRegion {
     Bios,
     Ewram,
     Iwram,
     Io,
-    Palette,
+    Pram,
     Vram,
     Oam,
     /// ROM wait-state window 0 (0x08000000–0x09FFFFFF)
@@ -26,10 +33,10 @@ impl MemoryRegion {
             0x0300_0000..=0x03FF_FFFF => Some(Self::Iwram),
             0x0400_0000..=0x04FF_FFFF => Some(Self::Io),
             // Internal Display Memory
-            0x0500_0000..=0x0500_03FF => Some(Self::Palette),
-            0x0600_0000..=0x0601_7FFF => Some(Self::Vram),
+            0x0500_0000..=0x0500_03FF => Some(Self::Pram),
+            0x0600_0000..=0x0601_FFFF => Some(Self::Vram),
             0x0700_0000..=0x0700_03FF => Some(Self::Oam),
-            // External Memory (Game Pak) — three wait-state ROM windows plus SRAM
+            // External Memory (Game Pak) - three wait-state ROM windows plus SRAM
             0x0800_0000..=0x09FF_FFFF => Some(Self::CartridgeWs0),
             0x0A00_0000..=0x0BFF_FFFF => Some(Self::CartridgeWs1),
             0x0C00_0000..=0x0DFF_FFFF => Some(Self::CartridgeWs2),

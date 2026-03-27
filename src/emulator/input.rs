@@ -39,8 +39,17 @@ impl InputState {
         }
     }
 
-    pub fn raw(&self) -> u16 {
-        self.buttons
+    pub fn read_8(&self, addr: u32) -> u8 {
+        let keyinput = self.read_16();
+        if addr & 1 == 0 { keyinput as u8 } else { (keyinput >> 8) as u8 }
+    }
+
+    pub fn read_16(&self) -> u16 {
+        (!self.buttons & 0x03FF) | 0xFC00
+    }
+
+    pub fn read_32(&self) -> u32 {
+        self.read_16() as u32
     }
 
     pub fn clear(&mut self) {

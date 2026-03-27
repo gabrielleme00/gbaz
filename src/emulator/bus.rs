@@ -1,13 +1,11 @@
 pub mod regions;
 
 use super::{Cartridge, IoDevices};
-use regions::MemoryRegion;
+use regions::{MemoryRegion, consts::*};
 use std::{cell::Cell, cell::RefCell, rc::Rc};
 
 const EWRAM_SIZE: usize = 256 * 1024;
 const IWRAM_SIZE: usize = 32 * 1024;
-const VRAM_SIZE: usize = 96 * 1024;
-const PALETTE_SIZE: usize = 1 * 1024;
 
 #[rustfmt::skip]#[derive(Clone, Copy, PartialEq)]
 pub enum AccessWidth { Byte, Half, Word }
@@ -18,8 +16,6 @@ pub struct Bus {
     bios: Vec<u8>,
     ewram: [u8; EWRAM_SIZE],
     iwram: [u8; IWRAM_SIZE],
-    vram: [u8; VRAM_SIZE],
-    pram: [u8; PALETTE_SIZE],
     pub io: Rc<RefCell<IoDevices>>,
     cartridge: Cartridge,
     last_addr: Cell<u32>, // For timing calculations of sequential accesses
@@ -35,8 +31,6 @@ impl Bus {
             bios: bios.unwrap_or_default(),
             ewram: [0; EWRAM_SIZE],
             iwram: [0; IWRAM_SIZE],
-            vram: [0; VRAM_SIZE],
-            pram: [0; PALETTE_SIZE],
             io: io_devs,
             cartridge,
             last_addr: Cell::new(0),
@@ -50,71 +44,123 @@ impl Bus {
     pub fn reset(&mut self) {
         self.ewram.fill(0);
         self.iwram.fill(0);
-        self.vram.fill(0);
-        self.pram.fill(0);
+        self.io.borrow_mut().ppu.vram.fill(0);
+        self.io.borrow_mut().ppu.pram.fill(0);
+        self.io.borrow_mut().ppu.oam.fill(0);
     }
 
     pub fn tick(&mut self) {
-        self.io.borrow_mut().ppu.tick(&self.vram, &self.pram);
+        self.io.borrow_mut().ppu.tick();
     }
 
-    pub fn read8(&self, addr: u32) -> u8 {
-        let data = if let Some(region) = MemoryRegion::from_addr(addr) {
-            use MemoryRegion::*;
-            match region {
-                Bios => self.bios.get(addr as usize).copied().unwrap_or(0xFF),
-                Ewram => self.ewram[Self::ewram_index(addr)],
-                Iwram => self.iwram[Self::iwram_index(addr)],
-                Io => self.io.borrow().read8(addr),
-                Vram => self.vram[Self::vram_index(addr)],
-                Palette => self.pram[Self::pram_index(addr)],
-                CartridgeWs0 | CartridgeWs1 | CartridgeWs2 => self.cartridge.read8(addr),
-                CartridgeSram => 0xFF,
-                _ => 0,
-            }
-        } else {
-            0
-        };
-        data
-    }
-
-    pub fn write8(&mut self, addr: u32, value: u8) {
+    pub fn read_8(&self, addr: u32) -> u8 {
         if let Some(region) = MemoryRegion::from_addr(addr) {
-            use MemoryRegion::*;
             match region {
-                Bios => {} // BIOS is read-only
-                Ewram => self.ewram[Self::ewram_index(addr)] = value,
-                Iwram => self.iwram[Self::iwram_index(addr)] = value,
-                Io => self.io.borrow_mut().write8(addr, value),
-                Vram => self.vram[Self::vram_index(addr)] = value,
-                Palette => self.pram[Self::pram_index(addr)] = value,
-                CartridgeWs0 | CartridgeWs1 | CartridgeWs2 => self.cartridge.write8(addr, value),
-                CartridgeSram => {}
+                MemoryRegion::Bios => self.bios.get(addr as usize).copied().unwrap_or(0xFF),
+                MemoryRegion::Ewram => self.ewram[Self::ewram_index(addr)],
+                MemoryRegion::Iwram => self.iwram[Self::iwram_index(addr)],
+                MemoryRegion::Io => self.io.borrow().read_8(addr),
+                // PRAM/VRAM/OAM are 16-bit. Read 16 and pick the byte.
+                MemoryRegion::Vram | MemoryRegion::Pram | MemoryRegion::Oam => {
+                    let val = self.read_16(addr & !1);
+                    if addr & 1 == 0 { (val & 0xFF) as u8 } else { (val >> 8) as u8 }
+                }
+                _ => self.cartridge.read_8(addr),
+            }
+        } else { 0 }
+    }
+
+    pub fn write_8(&mut self, addr: u32, value: u8) {
+        if let Some(region) = MemoryRegion::from_addr(addr) {
+            match region {
+                MemoryRegion::Bios => {} 
+                MemoryRegion::Ewram => self.ewram[Self::ewram_index(addr)] = value,
+                MemoryRegion::Iwram => self.iwram[Self::iwram_index(addr)] = value,
+                MemoryRegion::Vram => {
+                    // Hardware quirk: 8-bit writes to BG VRAM expand the byte to both halves of
+                    // the aligned 16-bit word. 8-bit writes to OBJ VRAM are ignored.
+                    let ofs = Self::vram_index(addr);
+                    if ofs < self.io.borrow().ppu.vram_obj_tiles_start as usize {
+                        let expanded = (value as u16) | ((value as u16) << 8);
+                        self.io.borrow_mut().ppu.vram_write_16(ofs & !1, expanded);
+                    }
+                },
+                MemoryRegion::Oam => { /* 8-bit OAM writes are ignored on GBA hardware */ },
+                MemoryRegion::Pram => {
+                    // Hardware quirk: 8-bit writes to PRAM replicate the byte to both halves of the 16-bit entry.
+                    self.io.borrow_mut().ppu.pram_write_16(Self::pram_index(addr), value as u16 | ((value as u16) << 8));
+                },
+                MemoryRegion::Io => self.io.borrow_mut().write_8(addr, value),
+                MemoryRegion::CartridgeWs0 | MemoryRegion::CartridgeWs1 | MemoryRegion::CartridgeWs2 
+                    => self.cartridge.write_8(addr, value),
                 _ => {}
             }
         }
     }
 
-    pub fn read16(&self, addr: u32) -> u16 {
-        let low = self.read8(addr) as u16;
-        let high = self.read8(addr + 1) as u16;
-        (high << 8) | low
+    pub fn read_16(&self, addr: u32) -> u16 {
+        // Force alignment for 16-bit reads
+        let addr = addr & !1;
+        if let Some(region) = MemoryRegion::from_addr(addr) {
+            match region {
+                MemoryRegion::Ewram => {
+                    let idx = Self::ewram_index(addr);
+                    u16::from_le_bytes(self.ewram[idx..idx+2].try_into().unwrap())
+                }
+                MemoryRegion::Iwram => {
+                    let idx = Self::iwram_index(addr);
+                    u16::from_le_bytes(self.iwram[idx..idx+2].try_into().unwrap())
+                }
+                MemoryRegion::Pram => self.io.borrow().ppu.pram_read_16(Self::pram_index(addr)),
+                MemoryRegion::Vram => self.io.borrow().ppu.vram_read_16(Self::vram_index(addr)),
+                MemoryRegion::Io => self.io.borrow().read_16(addr),
+                MemoryRegion::Oam => self.io.borrow().ppu.oam_read_16(addr),
+                _ => {
+                    let low = self.read_8(addr) as u16;
+                    let high = self.read_8(addr + 1) as u16;
+                    (high << 8) | low
+                }
+            }
+        } else { 0 }
     }
 
-    pub fn write16(&mut self, addr: u32, value: u16) {
-        self.write8(addr, (value & 0xFF) as u8);
-        self.write8(addr + 1, (value >> 8) as u8);
+    pub fn write_16(&mut self, addr: u32, value: u16) {
+        let addr = addr & !1;
+        if let Some(region) = MemoryRegion::from_addr(addr) {
+            match region {
+                MemoryRegion::Ewram => {
+                    let idx = Self::ewram_index(addr);
+                    self.ewram[idx..idx+2].copy_from_slice(&value.to_le_bytes());
+                }
+                MemoryRegion::Iwram => {
+                    let idx = Self::iwram_index(addr);
+                    self.iwram[idx..idx+2].copy_from_slice(&value.to_le_bytes());
+                }
+                MemoryRegion::Pram => {
+                    self.io.borrow_mut().ppu.pram_write_16(Self::pram_index(addr), value);
+                }
+                MemoryRegion::Vram => {
+                    self.io.borrow_mut().ppu.vram_write_16(Self::vram_index(addr), value);
+                }
+                MemoryRegion::Io => self.io.borrow_mut().write_16(addr, value),
+                MemoryRegion::Oam => self.io.borrow_mut().ppu.oam_write_16(addr, value),
+                _ => {
+                    self.write_8(addr, (value & 0xFF) as u8);
+                    self.write_8(addr + 1, (value >> 8) as u8);
+                }
+            }
+        }
     }
 
-    pub fn read32(&self, addr: u32) -> u32 {
-        let low = self.read16(addr) as u32;
-        let high = self.read16(addr + 2) as u32;
+    pub fn read_32(&self, addr: u32) -> u32 {
+        let low = self.read_16(addr) as u32;
+        let high = self.read_16(addr + 2) as u32;
         (high << 16) | low
     }
 
-    pub fn write32(&mut self, addr: u32, value: u32) {
-        self.write16(addr, (value & 0xFFFF) as u16);
-        self.write16(addr + 2, (value >> 16) as u16);
+    pub fn write_32(&mut self, addr: u32, value: u32) {
+        self.write_16(addr, (value & 0xFFFF) as u16);
+        self.write_16(addr.wrapping_add(2), (value >> 16) as u16);
     }
 
     pub fn cartridge_size(&self) -> usize {
@@ -130,7 +176,7 @@ impl Bus {
             Some(Bios) | Some(Iwram) | Some(Io) | Some(Oam) => 1,
             // 16-bit buses, 1 cycle for byte/half; treated as 1 cycle for word too
             // (PPU-side contention is not modelled here).
-            Some(Palette) | Some(Vram) => 1,
+            Some(Pram) | Some(Vram) => 1,
             // EWRAM: 16-bit bus, default 3S / 6N for 16-bit; double for 32-bit.
             Some(Ewram) => {
                 if width == Word {
@@ -167,7 +213,7 @@ impl Bus {
         use MemoryRegion::*;
         match MemoryRegion::from_addr(addr) {
             Some(Bios) | Some(Iwram) | Some(Io) | Some(Oam) => 1,
-            Some(Palette) | Some(Vram) => 1,
+            Some(Pram) | Some(Vram) => 1,
             // EWRAM: 16-bit N=6; Word = N + S = 6 + 3 = 9.
             Some(Ewram) => {
                 if width == Word {
@@ -214,9 +260,13 @@ impl Bus {
 #[rustfmt::skip]
 impl Bus {
     // Helper functions to calculate indices into memory blocks based on address.
-    // TODO: Not use % as it has a performance cost
-    fn ewram_index(addr: u32) -> usize { (addr - 0x0200_0000) as usize}
-    fn iwram_index(addr: u32) -> usize { ((addr - 0x0300_0000) as usize) % IWRAM_SIZE }
-    fn pram_index(addr: u32) -> usize { (addr - 0x0500_0000) as usize }
-    fn vram_index(addr: u32) -> usize { (addr - 0x0600_0000) as usize }
+    fn ewram_index(addr: u32) -> usize { (addr - EWRAM_ADDR) as usize}
+    fn iwram_index(addr: u32) -> usize { ((addr - IWRAM_ADDR) as usize) & 0x7FFF }
+    fn pram_index(addr: u32) -> usize { ((addr - PRAM_ADDR) as usize) & 0x3FF }
+    fn vram_index(addr: u32) -> usize {
+        // VRAM is 96KB (0x18000 bytes) mapped in a 128KB window.
+        // The last 32KB of the window (0x18000..0x1FFFF) mirrors 0x10000..0x17FFF.
+        let ofs = (addr - VRAM_ADDR) as usize & 0x1FFFF;
+        if ofs >= 0x18000 { ofs - 0x8000 } else { ofs }
+    }
 }

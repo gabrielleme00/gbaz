@@ -5,7 +5,7 @@ pub fn run_app<F: FnMut(&mut Window, &mut [u32])>(mut update: F) {
     let mut buffer = vec![0u32; SCREEN_WIDTH * SCREEN_HEIGHT];
     let options = WindowOptions {
         resize: true,
-        scale: Scale::X4,
+        scale: Scale::X1,
         scale_mode: ScaleMode::AspectRatioStretch,
         ..WindowOptions::default()
     };

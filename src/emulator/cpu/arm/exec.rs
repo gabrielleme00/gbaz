@@ -79,7 +79,7 @@ pub mod handlers {
                 if (reg_list >> i) & 1 == 0 {
                     continue;
                 }
-                let val = cpu.bus.borrow().read32(addr & !3);
+                let val = cpu.bus.borrow().read_32(addr & !3);
                 if use_user_regs {
                     cpu.set_reg_usr(i, val);
                 } else {
@@ -134,7 +134,7 @@ pub mod handlers {
                     // Normal case: store the current value of the register.
                     cpu.reg(i)
                 };
-                cpu.bus.borrow_mut().write32(addr & !3, val); // Stores are word-aligned by the hardware (bits 0-1 ignored)
+                cpu.bus.borrow_mut().write_32(addr & !3, val); // Stores are word-aligned by the hardware (bits 0-1 ignored)
                 addr = addr.wrapping_add(4); // Increment address for next transfer
             }
 
@@ -257,10 +257,10 @@ pub mod handlers {
         if l_bit {
             // LOAD
             let data = if b_bit {
-                cpu.bus.borrow().read8(transfer_addr) as u32
+                cpu.bus.borrow().read_8(transfer_addr) as u32
             } else {
                 // Misaligned Word Load quirk: Rotate the result
-                let raw_data = cpu.bus.borrow().read32(transfer_addr & !3);
+                let raw_data = cpu.bus.borrow().read_32(transfer_addr & !3);
                 let rotation = (transfer_addr & 3) * 8;
                 raw_data.rotate_right(rotation)
             };
@@ -280,10 +280,10 @@ pub mod handlers {
                 cpu.reg(rd_idx)
             };
             if b_bit {
-                cpu.bus.borrow_mut().write8(transfer_addr, val as u8);
+                cpu.bus.borrow_mut().write_8(transfer_addr, val as u8);
             } else {
                 // Stores are typically word-aligned by the hardware (bits 0-1 ignored)
-                cpu.bus.borrow_mut().write32(transfer_addr & !3, val);
+                cpu.bus.borrow_mut().write_32(transfer_addr & !3, val);
             }
         }
 
@@ -312,20 +312,20 @@ pub mod handlers {
 
         if b_bit {
             // SWPB: Byte swap
-            let mem_val = cpu.bus.borrow().read8(addr) as u32;
-            cpu.bus.borrow_mut().write8(addr, val_rm as u8);
+            let mem_val = cpu.bus.borrow().read_8(addr) as u32;
+            cpu.bus.borrow_mut().write_8(addr, val_rm as u8);
             cpu.set_reg(rd_idx, mem_val);
         } else {
             // SWP: Word swap
             // Read the word at the aligned address
-            let raw_mem_val = cpu.bus.borrow().read32(addr & !3);
+            let raw_mem_val = cpu.bus.borrow().read_32(addr & !3);
 
             // t452: Calculate rotation for misaligned addresses
             let rotation = (addr & 3) * 8;
             let rotated_mem_val = raw_mem_val.rotate_right(rotation);
 
             // Write the source value to the aligned address
-            cpu.bus.borrow_mut().write32(addr & !3, val_rm);
+            cpu.bus.borrow_mut().write_32(addr & !3, val_rm);
 
             // Update destination register with the (rotated) memory value
             cpu.set_reg(rd_idx, rotated_mem_val);
@@ -628,23 +628,23 @@ mod helpers {
                 0b01 => {
                     // LDRH (Unsigned Halfword)
                     if (addr & 1) == 0 {
-                        cpu.bus.borrow().read16(addr & !1) as u32
+                        cpu.bus.borrow().read_16(addr & !1) as u32
                     } else {
                         // t408: Misaligned LDRH quirk; ARM7TDMI bus-rotates the full 32-bit
                         // word and returns all 32 bits (no halfword mask).
-                        let word = cpu.bus.borrow().read32(addr & !3);
+                        let word = cpu.bus.borrow().read_32(addr & !3);
                         let rotation = (addr & 3) * 8;
                         word.rotate_right(rotation)
                     }
                 }
-                0b10 => cpu.bus.borrow().read8(addr) as i8 as i32 as u32, // LDRSB (Signed Byte)
+                0b10 => cpu.bus.borrow().read_8(addr) as i8 as i32 as u32, // LDRSB (Signed Byte)
                 0b11 => {
                     // LDRSH (Signed Halfword)
                     if (addr & 1) == 0 {
-                        cpu.bus.borrow().read16(addr & !1) as i16 as i32 as u32
+                        cpu.bus.borrow().read_16(addr & !1) as i16 as i32 as u32
                     } else {
                         // LDRSH at odd address behaves like LDRSB
-                        cpu.bus.borrow().read8(addr) as i8 as i32 as u32
+                        cpu.bus.borrow().read_8(addr) as i8 as i32 as u32
                     }
                 }
                 _ => unreachable!(),
@@ -662,7 +662,7 @@ mod helpers {
             } else {
                 cpu.reg(rd)
             };
-            cpu.bus.borrow_mut().write16(addr & !1, val as u16);
+            cpu.bus.borrow_mut().write_16(addr & !1, val as u16);
         }
 
         // Write-back Logic

@@ -36,27 +36,49 @@ impl InterruptController {
         }
     }
 
-    pub fn read(&self, addr: u32) -> u8 {
+    pub fn read_8(&self, addr: u32) -> u8 {
+        let half = self.read_16(addr & !1);
+        if addr & 1 == 0 { half as u8 } else { (half >> 8) as u8 }
+    }
+
+    pub fn read_16(&self, addr: u32) -> u16 {
         match addr {
-            0x0400_0200 => (self.enable & 0xFF) as u8,
-            0x0400_0201 => (self.enable >> 8) as u8,
-            0x0400_0202 => (*self.flag.borrow() & 0xFF) as u8,
-            0x0400_0203 => (*self.flag.borrow() >> 8) as u8,
-            0x0400_0208 => self.master_enable as u8,
+            0x0400_0200 => self.enable,
+            0x0400_0202 => *self.flag.borrow(),
+            0x0400_0208 => self.master_enable as u16,
             _ => 0,
         }
     }
 
-    pub fn write(&mut self, addr: u32, value: u8) {
+    pub fn read_32(&self, addr: u32) -> u32 {
+        let lo = self.read_16(addr) as u32;
+        let hi = self.read_16(addr + 2) as u32;
+        lo | (hi << 16)
+    }
+
+    pub fn write_8(&mut self, addr: u32, value: u8) {
+        let half = self.read_16(addr & !1);
+        let new = if addr & 1 == 0 {
+            (half & 0xFF00) | (value as u16)
+        } else {
+            (half & 0x00FF) | ((value as u16) << 8)
+        };
+        self.write_16(addr & !1, new);
+    }
+
+    pub fn write_16(&mut self, addr: u32, value: u16) {
         match addr {
-            0x0400_0200 => self.enable = (self.enable & 0xFF00) | value as u16,
-            0x0400_0201 => self.enable = (self.enable & 0x00FF) | ((value as u16) << 8),
+            0x0400_0200 => self.enable = value,
             // IF is write-1-to-clear: writing a 1 acknowledges (clears) that interrupt bit.
-            0x0400_0202 => *self.flag.borrow_mut() &= !(value as u16),
-            0x0400_0203 => *self.flag.borrow_mut() &= !((value as u16) << 8),
+            0x0400_0202 => *self.flag.borrow_mut() &= !(value & 0x00FF),
             0x0400_0208 => self.master_enable = value != 0,
             _ => {}
         }
+    }
+
+    pub fn write_32(&mut self, addr: u32, value: u32) {
+        self.write_16(addr, value as u16);
+        self.write_16(addr + 2, (value >> 16) as u16);
     }
 
     /// Returns true if a maskable IRQ is pending and should be dispatched.

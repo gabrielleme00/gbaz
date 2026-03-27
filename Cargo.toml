@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 bitfield = "0.19.4"
+bitflags = "2.11.0"
 minifb = "0.28.0"

@@ -2,8 +2,9 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use gbaz::emulator::Emulator;
+use gbaz::emulator::{Button, Emulator, InputState};
 use gbaz::app::run_app;
+use minifb::Key;
 
 fn main() -> ExitCode {
     let mut args = env::args();
@@ -56,15 +57,28 @@ fn main() -> ExitCode {
 
     let mut emulator = Emulator::new(rom, bios);
 
-    run_app(|_window, buffer| {
+    run_app(|window, buffer| {
+        let mut input = InputState::default();
+        let key_map: &[(Key, Button)] = &[
+            (Key::X,         Button::A),
+            (Key::Z,         Button::B),
+            (Key::Backspace, Button::Select),
+            (Key::Enter,     Button::Start),
+            (Key::Right,     Button::Right),
+            (Key::Left,      Button::Left),
+            (Key::Up,        Button::Up),
+            (Key::Down,      Button::Down),
+            (Key::S,         Button::R),
+            (Key::A,         Button::L),
+        ];
+        for &(key, button) in key_map {
+            input.set_pressed(button, window.is_key_down(key));
+        }
+        emulator.set_input(input);
         emulator.run_frame();
-        // Convert BGR555 (GBA) → 0x00RRGGBB (minifb).
-        // BGR555: bits [4:0]=R, [9:5]=G, [14:10]=B, each 5-bit → 8-bit by << 3.
+
         for (dst, &pixel) in buffer.iter_mut().zip(emulator.framebuffer().iter()) {
-            let r = ((pixel & 0x1F) as u32) << 3;
-            let g = (((pixel >> 5) & 0x1F) as u32) << 3;
-            let b = (((pixel >> 10) & 0x1F) as u32) << 3;
-            *dst = (r << 16) | (g << 8) | b;
+            *dst = pixel;
         }
     });
 
