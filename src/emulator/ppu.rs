@@ -116,7 +116,7 @@ pub struct Ppu {
     bg_line: [[Rgb15; SCREEN_WIDTH]; 4],
 
     // Pixel buffer for the current frame (15-bit BGR555, row-major, 240×160)
-    frame_buffer: [u32; SCREEN_WIDTH * SCREEN_HEIGHT],
+    frame_buffer: Box<[u32]>,
 
     // Edge-triggered DMA event signals, consumed by the emulator main loop.
     pub hblank_dma_trigger: bool,
@@ -151,7 +151,7 @@ impl Ppu {
                 .into_boxed_slice(),
             vram_obj_tiles_start: VRAM_OBJ_TILES_START_TEXT,
             bg_line: [[Rgb15::default(); SCREEN_WIDTH]; 4],
-            frame_buffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
+            frame_buffer: vec![0u32; SCREEN_WIDTH * SCREEN_HEIGHT].into_boxed_slice(),
             hblank_dma_trigger: false,
             vblank_dma_trigger: false,
         }

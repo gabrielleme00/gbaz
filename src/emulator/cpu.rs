@@ -6,8 +6,8 @@ use std::{cell::RefCell, rc::Rc};
 
 use super::bus::{AccessWidth, Bus};
 
-use arm::{ARM_TABLE_SIZE, ArmHandler, disasm_arm, generate_arm_table};
-use thumb::{THUMB_TABLE_SIZE, ThumbHandler, disasm_thumb, generate_thumb_table};
+use arm::{ArmHandler, disasm_arm, generate_arm_table};
+use thumb::{ThumbHandler, disasm_thumb, generate_thumb_table};
 
 // CPSR flag bit positions
 const FLAG_N: u32 = 1 << 31;
@@ -103,9 +103,9 @@ pub struct Cpu {
     /// Read by `step()` when `pipeline_flushed` is true.
     pending_fetch_cycles: u32,
     /// Decode-table of ARM instruction handlers (indexed by 12-bit key).
-    arm_table: [ArmHandler; ARM_TABLE_SIZE],
+    arm_table: Box<[ArmHandler]>,
     /// Decode-table of Thumb instruction handlers (indexed by 10-bit key).
-    thumb_table: [ThumbHandler; THUMB_TABLE_SIZE],
+    thumb_table: Box<[ThumbHandler]>,
     /// When `true`, each executed instruction is disassembled and printed to stderr.
     disasm_enabled: bool,
 }
@@ -132,8 +132,8 @@ impl Cpu {
             arm_pipe: [PipeWord::EMPTY; 2],
             pipeline_flushed: false,
             pending_fetch_cycles: 0,
-            arm_table: generate_arm_table(),
-            thumb_table: generate_thumb_table(),
+            arm_table: Box::new(generate_arm_table()),
+            thumb_table: Box::new(generate_thumb_table()),
             disasm_enabled: false,
         }
     }

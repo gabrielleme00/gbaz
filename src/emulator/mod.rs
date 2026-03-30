@@ -29,7 +29,7 @@ use std::{
 
 /// Coordinates all emulated hardware blocks and advances them in lockstep.
 pub struct Emulator {
-    cpu: Box<Cpu>,
+    cpu: Cpu,
     bus: Rc<RefCell<Bus>>,
     pub io_devs: Rc<RefCell<IoDevices>>,
 }
@@ -42,14 +42,14 @@ impl Emulator {
         let interrupt_flags = Rc::new(RefCell::new(0));
 
         let intc = InterruptController::new(interrupt_flags.clone());
-        let ppu = Box::new(Ppu::new(interrupt_flags.clone()));
+        let ppu = Ppu::new(interrupt_flags.clone());
         let apu = Apu::new();
         let dma = Dma::new(interrupt_flags.clone());
         let timer = Timer::new(interrupt_flags.clone());
 
         let io_devs = Rc::new(RefCell::new(IoDevices::new(intc, ppu, apu, dma, timer)));
         let bus = Rc::new(RefCell::new(Bus::new(cartridge, io_devs.clone(), bios)));
-        let cpu = Box::new(Cpu::new(bus.clone()));
+        let cpu = Cpu::new(bus.clone());
 
         let mut emu = Self { cpu, bus, io_devs };
 

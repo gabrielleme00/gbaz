@@ -31,7 +31,7 @@ pub struct IoDevices {
     pub interrupt: InterruptController,
 
     // Modules
-    pub ppu: Box<Ppu>,
+    pub ppu: Ppu,
     pub apu: Apu,
     pub dma: Dma,
     pub timer: Timer,
@@ -45,7 +45,7 @@ pub struct IoDevices {
 }
 
 impl IoDevices {
-    pub fn new(interrupt: InterruptController, ppu: Box<Ppu>, apu: Apu, dma: Dma, timer: Timer) -> Self {
+    pub fn new(interrupt: InterruptController, ppu: Ppu, apu: Apu, dma: Dma, timer: Timer) -> Self {
         Self {
             interrupt,
             ppu,
