@@ -84,13 +84,14 @@ impl Emulator {
         for _ in 0..cycles {
             self.bus.borrow_mut().tick();
 
-            // Consume edge-triggered DMA events from the PPU.
-            let (hblank, vblank) = {
+            // Consume all edge-triggered flags
+            let (hblank, vblank, fifo_flags, vcount) = {
                 let mut io = self.io_devs.borrow_mut();
-                (
-                    io.ppu.take_hblank_dma_trigger(),
-                    io.ppu.take_vblank_dma_trigger(),
-                )
+                let hblank = io.ppu.take_hblank_dma_trigger();
+                let vblank = io.ppu.take_vblank_dma_trigger();
+                let fifo_flags = io.take_sound_dma_flags();
+                let vcount = io.ppu.vcount();
+                (hblank, vblank, fifo_flags, vcount)
             };
 
             if hblank {
@@ -98,16 +99,11 @@ impl Emulator {
 
                 // Video capture (DMA3 Special): fires each scanline for VCOUNT 2..=161,
                 // then auto-disables at VCOUNT 162.
-                let vcount = self.io_devs.borrow().ppu.vcount();
                 if vcount == 162 {
                     self.io_devs.borrow_mut().dma.stop_video_capture();
                 } else if vcount >= 2
                     && vcount < 162
-                    && self
-                        .io_devs
-                        .borrow()
-                        .dma
-                        .channel_wants_run(3, DmaEvent::Special)
+                    && self.io_devs.borrow().dma.channel_wants_run(3, DmaEvent::Special)
                 {
                     self.run_dma_channel(3);
                 }
@@ -118,24 +114,33 @@ impl Emulator {
             }
 
             // Sound FIFO DMA: channels 1 and 2 carry FIFO A and B respectively.
-            let fifo_flags = self.io_devs.borrow_mut().take_sound_dma_flags();
-            if fifo_flags & 1 != 0
-                && self.io_devs.borrow().dma.channel_wants_run(1, DmaEvent::Special)
-            {
-                self.run_dma_channel(1);
-            }
-            if fifo_flags & 2 != 0
-                && self.io_devs.borrow().dma.channel_wants_run(2, DmaEvent::Special)
-            {
-                self.run_dma_channel(2);
+            if fifo_flags != 0 {
+                let (wants1, wants2) = {
+                    let io = self.io_devs.borrow();
+                    (
+                        fifo_flags & 1 != 0 && io.dma.channel_wants_run(1, DmaEvent::Special),
+                        fifo_flags & 2 != 0 && io.dma.channel_wants_run(2, DmaEvent::Special),
+                    )
+                };
+                if wants1 { self.run_dma_channel(1); }
+                if wants2 { self.run_dma_channel(2); }
             }
         }
     }
 
     /// Fire all enabled channels that match `event`.
     fn run_dma_event(&mut self, event: DmaEvent) {
-        for ch in 0..4_usize {
-            if self.io_devs.borrow().dma.channel_wants_run(ch, event) {
+        let wants = {
+            let io = self.io_devs.borrow();
+            [
+                io.dma.channel_wants_run(0, event),
+                io.dma.channel_wants_run(1, event),
+                io.dma.channel_wants_run(2, event),
+                io.dma.channel_wants_run(3, event),
+            ]
+        };
+        for (ch, run) in wants.into_iter().enumerate() {
+            if run {
                 self.run_dma_channel(ch);
             }
         }
@@ -156,13 +161,14 @@ impl Emulator {
     fn do_dma_burst(&mut self, params: &DmaRunParams) -> (u32, u32) {
         let mut src = params.src;
         let mut dst = params.dst;
+        let mut bus = self.bus.borrow_mut();
         for _ in 0..params.count {
             if params.is_word {
-                let val = self.bus.borrow().read_32(src);
-                self.bus.borrow_mut().write_32(dst, val);
+                let val = bus.read_32(src);
+                bus.write_32(dst, val);
             } else {
-                let val = self.bus.borrow().read_16(src);
-                self.bus.borrow_mut().write_16(dst, val);
+                let val = bus.read_16(src);
+                bus.write_16(dst, val);
             }
             src = src.wrapping_add_signed(params.src_step);
             dst = dst.wrapping_add_signed(params.dst_step);

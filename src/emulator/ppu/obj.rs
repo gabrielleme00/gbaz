@@ -147,7 +147,7 @@ impl Ppu {
                         break;
                     }
                     if self
-                        .obj_buffer_get(screen_x as usize, screen_y as usize)
+                        .obj_buffer_get(screen_x as usize)
                         .priority
                         <= attrs.2.priority()
                         && !attrs.is_obj_window()
@@ -172,7 +172,7 @@ impl Ppu {
                         if pixel_color != Rgb15::TRANSPARENT {
                             self.write_obj_pixel(
                                 screen_x as usize,
-                                screen_y as usize,
+
                                 pixel_color,
                                 &attrs,
                             );
@@ -241,7 +241,7 @@ impl Ppu {
                         break;
                     }
                     if self
-                        .obj_buffer_get(screen_x as usize, screen_y as usize)
+                        .obj_buffer_get(screen_x as usize)
                         .priority
                         <= attrs.2.priority()
                         && !attrs.is_obj_window()
@@ -272,7 +272,6 @@ impl Ppu {
                     if pixel_color != Rgb15::TRANSPARENT {
                         self.write_obj_pixel(
                             screen_x as usize,
-                            screen_y as usize,
                             pixel_color,
                             &attrs,
                         );
@@ -287,8 +286,8 @@ impl Ppu {
         }
     }
 
-    fn write_obj_pixel(&mut self, x: usize, y: usize, pixel_color: Rgb15, attrs: &ObjAttrs) {
-        let current_obj = self.obj_buffer_get_mut(x, y);
+    fn write_obj_pixel(&mut self, x: usize, pixel_color: Rgb15, attrs: &ObjAttrs) {
+        let current_obj = self.obj_buffer_get_mut(x);
         let obj_mode = ObjMode::from(attrs.0.objmode());
         match obj_mode {
             ObjMode::Normal | ObjMode::Sfx => {

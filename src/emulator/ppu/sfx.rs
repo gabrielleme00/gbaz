@@ -12,25 +12,30 @@ impl Rgb15 {
     }
 }
 
-/// Filters a background indexes array by whether they're active
-fn filter_window_backgrounds(backgrounds: &[usize], window_flags: WindowFlags) -> Vec<usize> {
-    backgrounds
-        .iter()
-        .copied()
-        .filter(|bg| window_flags.bg_enabled(*bg))
-        .collect()
+/// Fills a stack buffer with the subset of `backgrounds` enabled by `window_flags`.
+fn filter_window_backgrounds(backgrounds: &[usize], window_flags: WindowFlags) -> ([usize; 4], usize) {
+    let mut buf = [0usize; 4];
+    let mut len = 0;
+    for &bg in backgrounds {
+        if window_flags.bg_enabled(bg) {
+            buf[len] = bg;
+            len += 1;
+        }
+    }
+    (buf, len)
 }
 
 impl Ppu {
     #[allow(unused)]
-    fn layer_to_pixel(&mut self, x: usize, y: usize, layer: &RenderLayer) -> Rgb15 {
+    fn layer_to_pixel(&mut self, x: usize, layer: &RenderLayer) -> Rgb15 {
+        use RenderLayerKind::*;
         match layer.kind {
-            RenderLayerKind::Background0 => self.bg_line[0][x],
-            RenderLayerKind::Background1 => self.bg_line[1][x],
-            RenderLayerKind::Background2 => self.bg_line[2][x],
-            RenderLayerKind::Background3 => self.bg_line[3][x],
-            RenderLayerKind::Objects => self.obj_buffer_get(x, y).color,
-            RenderLayerKind::Backdrop => Rgb15(self.pram_read_16(0)),
+            Background0 => self.bg_line[0][x],
+            Background1 => self.bg_line[1][x],
+            Background2 => self.bg_line[2][x],
+            Background3 => self.bg_line[3][x],
+            Objects => self.obj_buffer_get(x).color,
+            Backdrop => Rgb15(self.pram_read_16(0)),
         }
     }
 
@@ -39,18 +44,21 @@ impl Ppu {
     pub fn finalize_scanline(&mut self, bg_start: usize, bg_end: usize) {
         let backdrop_color = Rgb15(self.pram_read_16(0));
 
-        if self.vcount == 60 {
-            // probe moved to cpu.rs brightness call
-        }
-
         // Filter out disabled backgrounds and sort by priority
         // The backgrounds are sorted once for the entire scanline
         // In bitmap modes (3/4/5) BG2 is always active regardless of the bg2_enable bit.
         let bitmap_mode = matches!(self.dispcnt.mode(), 3 | 4 | 5);
-        let mut sorted_backgrounds: Vec<usize> = (bg_start..=bg_end)
-            .filter(|bg| bitmap_mode || self.is_bg_enabled(*bg))
-            .collect();
-        sorted_backgrounds.sort_by_key(|bg| (self.bgcnt[*bg].priority(), *bg));
+        let mut sorted_bg_arr = [0usize; 4];
+        let mut sorted_bg_len = 0;
+        for bg in bg_start..=bg_end {
+            if bitmap_mode || self.is_bg_enabled(bg) {
+                sorted_bg_arr[sorted_bg_len] = bg;
+                sorted_bg_len += 1;
+            }
+        }
+        let sorted_bg = &mut sorted_bg_arr[..sorted_bg_len];
+        sorted_bg.sort_by_key(|bg| (self.bgcnt[*bg].priority(), *bg));
+        let sorted_backgrounds: &[usize] = sorted_bg;
 
         let y = self.vcount as usize;
 
@@ -63,7 +71,7 @@ impl Ppu {
             for x in 0..SCREEN_WIDTH {
                 let win = WindowInfo::new(WindowType::WinNone, WindowFlags::all());
                 output[x] = self
-                    .finalize_pixel(x, y, &win, &sorted_backgrounds, backdrop_color)
+                    .finalize_pixel(x, &win, sorted_backgrounds, backdrop_color)
                     .to_rgb24();
             }
         } else {
@@ -71,7 +79,8 @@ impl Ppu {
             let mut occupied_count = 0;
             if self.dispcnt.win0_enable() && self.win0.contains_y(y) {
                 let win = WindowInfo::new(WindowType::Win0, self.win0.flags);
-                let backgrounds = filter_window_backgrounds(&sorted_backgrounds, win.flags);
+                let (bg_buf, bg_len) = filter_window_backgrounds(sorted_backgrounds, win.flags);
+                let backgrounds = &bg_buf[..bg_len];
                 for (x, is_occupied) in occupied
                     .iter_mut()
                     .enumerate()
@@ -79,7 +88,7 @@ impl Ppu {
                     .skip(self.win0.left())
                 {
                     output[x] = self
-                        .finalize_pixel(x, y, &win, &backgrounds, backdrop_color)
+                        .finalize_pixel(x, &win, backgrounds, backdrop_color)
                         .to_rgb24();
                     *is_occupied = true;
                     occupied_count += 1;
@@ -90,7 +99,8 @@ impl Ppu {
             }
             if self.dispcnt.win1_enable() && self.win1.contains_y(y) {
                 let win = WindowInfo::new(WindowType::Win1, self.win1.flags);
-                let backgrounds = filter_window_backgrounds(&sorted_backgrounds, win.flags);
+                let (bg_buf, bg_len) = filter_window_backgrounds(sorted_backgrounds, win.flags);
+                let backgrounds = &bg_buf[..bg_len];
                 for (x, is_occupied) in occupied
                     .iter_mut()
                     .enumerate()
@@ -101,7 +111,7 @@ impl Ppu {
                         continue;
                     }
                     output[x] = self
-                        .finalize_pixel(x, y, &win, &backgrounds, backdrop_color)
+                        .finalize_pixel(x, &win, backgrounds, backdrop_color)
                         .to_rgb24();
                     *is_occupied = true;
                     occupied_count += 1;
@@ -111,25 +121,27 @@ impl Ppu {
                 return;
             }
             let win_out = WindowInfo::new(WindowType::WinOut, self.winout_flags);
-            let win_out_backgrounds = filter_window_backgrounds(&sorted_backgrounds, win_out.flags);
+            let (win_out_bg_buf, win_out_bg_len) = filter_window_backgrounds(sorted_backgrounds, win_out.flags);
+            let win_out_backgrounds = &win_out_bg_buf[..win_out_bg_len];
             if self.dispcnt.obj_win_enable() {
                 let win_obj = WindowInfo::new(WindowType::WinObj, self.winobj_flags);
-                let win_obj_backgrounds =
-                    filter_window_backgrounds(&sorted_backgrounds, win_obj.flags);
+                let (win_obj_bg_buf, win_obj_bg_len) =
+                    filter_window_backgrounds(sorted_backgrounds, win_obj.flags);
+                let win_obj_backgrounds = &win_obj_bg_buf[..win_obj_bg_len];
                 for (x, is_occupied) in occupied.iter().enumerate().take(SCREEN_WIDTH) {
                     if *is_occupied {
                         continue;
                     }
-                    let obj_entry = self.obj_buffer_get(x, y);
+                    let obj_entry = self.obj_buffer_get(x);
                     if obj_entry.window {
                         // WinObj
                         output[x] = self
-                            .finalize_pixel(x, y, &win_obj, &win_obj_backgrounds, backdrop_color)
+                            .finalize_pixel(x, &win_obj, win_obj_backgrounds, backdrop_color)
                             .to_rgb24();
                     } else {
                         // WinOut
                         output[x] = self
-                            .finalize_pixel(x, y, &win_out, &win_out_backgrounds, backdrop_color)
+                            .finalize_pixel(x, &win_out, win_out_backgrounds, backdrop_color)
                             .to_rgb24();
                     }
                 }
@@ -139,7 +151,7 @@ impl Ppu {
                         continue;
                     }
                     output[x] = self
-                        .finalize_pixel(x, y, &win_out, &win_out_backgrounds, backdrop_color)
+                        .finalize_pixel(x, &win_out, win_out_backgrounds, backdrop_color)
                         .to_rgb24();
                 }
             }
@@ -150,7 +162,6 @@ impl Ppu {
     fn finalize_pixel(
         &mut self,
         x: usize,
-        y: usize,
         win: &WindowInfo,
         backgrounds: &[usize],
         backdrop_color: Rgb15,
@@ -176,7 +187,7 @@ impl Ppu {
         drop(it);
 
         // Now that backgrounds are taken care of, we need to check if there is an object pixel that takes priority of one of the layers
-        let obj_entry = self.obj_buffer_get(x, y);
+        let obj_entry = self.obj_buffer_get(x);
         if win.flags.obj_enabled() && self.dispcnt.obj_enable() && obj_entry.color.is_opaque() {
             let obj_layer = RenderLayer::objects(obj_entry.color, obj_entry.priority);
             if obj_layer.priority <= top_layer.priority {

@@ -147,8 +147,7 @@ impl Ppu {
             vram: vec![0u8; VRAM_SIZE].into_boxed_slice(),
             pram: vec![0u8; PRAM_SIZE].into_boxed_slice(),
             oam: vec![0u8; OAM_SIZE].into_boxed_slice(),
-            obj_buffer: vec![ObjBufferEntry::default(); SCREEN_WIDTH * SCREEN_HEIGHT]
-                .into_boxed_slice(),
+            obj_buffer: vec![ObjBufferEntry::default(); SCREEN_WIDTH].into_boxed_slice(),
             vram_obj_tiles_start: VRAM_OBJ_TILES_START_TEXT,
             bg_line: [[Rgb15::default(); SCREEN_WIDTH]; 4],
             frame_buffer: vec![0u32; SCREEN_WIDTH * SCREEN_HEIGHT].into_boxed_slice(),
@@ -158,8 +157,8 @@ impl Ppu {
     }
 
     #[inline]
-    fn obj_buffer_get_mut(&mut self, x: usize, y: usize) -> &mut ObjBufferEntry {
-        &mut self.obj_buffer[index2d!(x, y, SCREEN_WIDTH)]
+    fn obj_buffer_get_mut(&mut self, x: usize) -> &mut ObjBufferEntry {
+        &mut self.obj_buffer[x]
     }
 
     /// Returns the current scanline counter (VCOUNT).
@@ -255,8 +254,8 @@ impl Ppu {
     }
 
     #[inline]
-    pub(super) fn obj_buffer_get(&self, x: usize, y: usize) -> &ObjBufferEntry {
-        &self.obj_buffer[index2d!(x, y, SCREEN_WIDTH)]
+    pub(super) fn obj_buffer_get(&self, x: usize) -> &ObjBufferEntry {
+        &self.obj_buffer[x]
     }
 
     /// Increments the internal affine reference points for BG2/BG3 by the B/D parameters.

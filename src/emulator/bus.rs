@@ -11,7 +11,6 @@ const IWRAM_SIZE: usize = 32 * 1024;
 pub enum AccessWidth { Byte, Half, Word }
 
 /// Central memory bus. Owns mapped memory blocks and routes reads/writes.
-#[derive(Clone)]
 pub struct Bus {
     bios: Vec<u8>,
     ewram: [u8; EWRAM_SIZE],
@@ -153,12 +152,42 @@ impl Bus {
     }
 
     pub fn read_32(&self, addr: u32) -> u32 {
+        let addr = addr & !3;
+        if let Some(region) = MemoryRegion::from_addr(addr) {
+            match region {
+                MemoryRegion::Ewram => {
+                    let idx = Self::ewram_index(addr);
+                    return u32::from_le_bytes(self.ewram[idx..idx + 4].try_into().unwrap());
+                }
+                MemoryRegion::Iwram => {
+                    let idx = Self::iwram_index(addr);
+                    return u32::from_le_bytes(self.iwram[idx..idx + 4].try_into().unwrap());
+                }
+                _ => {}
+            }
+        }
         let low = self.read_16(addr) as u32;
         let high = self.read_16(addr + 2) as u32;
         (high << 16) | low
     }
 
     pub fn write_32(&mut self, addr: u32, value: u32) {
+        let addr = addr & !3;
+        if let Some(region) = MemoryRegion::from_addr(addr) {
+            match region {
+                MemoryRegion::Ewram => {
+                    let idx = Self::ewram_index(addr);
+                    self.ewram[idx..idx + 4].copy_from_slice(&value.to_le_bytes());
+                    return;
+                }
+                MemoryRegion::Iwram => {
+                    let idx = Self::iwram_index(addr);
+                    self.iwram[idx..idx + 4].copy_from_slice(&value.to_le_bytes());
+                    return;
+                }
+                _ => {}
+            }
+        }
         self.write_16(addr, (value & 0xFFFF) as u16);
         self.write_16(addr.wrapping_add(2), (value >> 16) as u16);
     }
