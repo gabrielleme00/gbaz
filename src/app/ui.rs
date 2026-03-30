@@ -4,7 +4,7 @@ use crate::config::EmulatorConfig;
 use crate::emulator::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::emulator::{Button, InputState};
 
-use super::state::EmulatorState;
+use super::state::{AudioDiag, EmulatorState};
 
 const KEY_MAP: &[(egui::Key, Button)] = &[
     (egui::Key::X, Button::A),
@@ -152,6 +152,9 @@ impl GbazApp {
                         self.state.toggle_pause();
                         ui.close();
                     }
+
+                    ui.separator();
+                    ui.checkbox(&mut self.state.audio_debug, "Audio debug");
                 });
 
                 ui.menu_button("Settings", |ui| {
@@ -198,6 +201,54 @@ impl GbazApp {
                 });
         }
     }
+
+    fn show_audio_debug(&self, ctx: &egui::Context) {
+        let diag: Option<AudioDiag> = self.state.audio_diag();
+        egui::Window::new("Audio Debug")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 32.0))
+            .show(ctx, |ui| {
+                match diag {
+                    None => { ui.label("Audio disabled"); }
+                    Some(d) => {
+                        let fill = d.buf_frames as f32 / d.buf_cap as f32;
+                        ui.label(format!(
+                            "Buffer: {:.1} ms  ({}/{})",
+                            d.buf_ms, d.buf_frames, d.buf_cap
+                        ));
+                        ui.add(
+                            egui::ProgressBar::new(fill)
+                                .desired_width(200.0)
+                                .text(format!("{:.0}%", fill * 100.0)),
+                        );
+                        ui.add_space(4.0);
+                        let under_color = if d.underflows > 0 {
+                            egui::Color32::from_rgb(255, 80, 80)
+                        } else {
+                            egui::Color32::GREEN
+                        };
+                        let over_color = if d.overflows > 0 {
+                            egui::Color32::YELLOW
+                        } else {
+                            egui::Color32::GREEN
+                        };
+                        ui.colored_label(under_color, format!("Underflows: {}", d.underflows));
+                        ui.colored_label(over_color,  format!("Overflows:  {}", d.overflows));
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new(
+                            if d.underflows > 0 {
+                                "⚠ Underflows → emulator too slow / buffer starved"
+                            } else if d.overflows > 0 {
+                                "⚠ Overflows → emulator too fast / buffer full"
+                            } else {
+                                "✓ No drops detected"
+                            }
+                        ).small());
+                    }
+                }
+            });
+    }
 }
 
 impl eframe::App for GbazApp {
@@ -208,6 +259,9 @@ impl eframe::App for GbazApp {
         self.show_menu(ctx);
         self.show_screen(ctx);
         self.show_error_popup(ctx);
+        if self.state.audio_debug {
+            self.show_audio_debug(ctx);
+        }
         ctx.request_repaint();
     }
 }

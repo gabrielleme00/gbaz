@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 bitfield = "0.19.4"
 bitflags = "2.11.0"
+cpal = "0.15"
+crossbeam-queue = "0.3"
 directories = "6.0.0"
 eframe = "0.33.3"
 rfd = "0.17.2"

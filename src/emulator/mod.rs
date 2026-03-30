@@ -116,6 +116,19 @@ impl Emulator {
             if vblank {
                 self.run_dma_event(DmaEvent::VBlank);
             }
+
+            // Sound FIFO DMA: channels 1 and 2 carry FIFO A and B respectively.
+            let fifo_flags = self.io_devs.borrow_mut().take_sound_dma_flags();
+            if fifo_flags & 1 != 0
+                && self.io_devs.borrow().dma.channel_wants_run(1, DmaEvent::Special)
+            {
+                self.run_dma_channel(1);
+            }
+            if fifo_flags & 2 != 0
+                && self.io_devs.borrow().dma.channel_wants_run(2, DmaEvent::Special)
+            {
+                self.run_dma_channel(2);
+            }
         }
     }
 
@@ -175,6 +188,16 @@ impl Emulator {
     /// Updates the button state seen by KEYINPUT (0x0400_0130).
     pub fn set_input(&mut self, input: InputState) {
         self.io_devs.borrow_mut().input = input;
+    }
+
+    /// Configures the APU output sample rate to match the audio backend.
+    pub fn set_audio_sample_rate(&mut self, rate: u32) {
+        self.io_devs.borrow_mut().apu.set_sample_rate(rate);
+    }
+
+    /// Drains APU-generated samples into `buf`.
+    pub fn drain_audio_samples(&mut self, buf: &mut Vec<f32>) {
+        self.io_devs.borrow_mut().apu.drain_samples(buf);
     }
 
     /// Enables or disables CPU disassembly output.

@@ -15,7 +15,7 @@ use consts::*;
 
 /// One GBA hardware timer channel.
 struct Channel {
-    /// Reload value — written to TMxCNT_L; copied to counter on start or overflow.
+    /// Reload value - written to TMxCNT_L; copied to counter on start or overflow.
     reload: u16,
     /// Counter snapshot: the exact counter value at `timestamp`.
     counter: u16,
@@ -80,6 +80,8 @@ pub struct Timer {
     channels: [Channel; 4],
     cycles: u64,
     interrupt_flags: Rc<RefCell<u16>>,
+    /// Bitmask of channels that overflowed since last call to `take_overflow_flags()`.
+    overflow_pending: u8,
 }
 
 impl Timer {
@@ -88,6 +90,7 @@ impl Timer {
             channels: std::array::from_fn(|_| Channel::new()),
             cycles: 0,
             interrupt_flags,
+            overflow_pending: 0,
         }
     }
 
@@ -96,6 +99,14 @@ impl Timer {
             *ch = Channel::new();
         }
         self.cycles = 0;
+        self.overflow_pending = 0;
+    }
+
+    /// Returns and clears the bitmask of channels that overflowed since the last call.
+    pub fn take_overflow_flags(&mut self) -> u8 {
+        let flags = self.overflow_pending;
+        self.overflow_pending = 0;
+        flags
     }
 
     /// Advance the timer block by `delta` clock cycles, firing overflows as needed.
@@ -147,11 +158,11 @@ impl Timer {
             return;
         }
         match reg {
-            // TMxCNT_L — reload register only (counter unchanged until start)
+            // TMxCNT_L - reload register only (counter unchanged until start)
             0 => {
                 self.channels[ch].reload = value;
             }
-            // TMxCNT_H — control register; handle start/stop transitions
+            // TMxCNT_H - control register; handle start/stop transitions
             2 => {
                 let was_started = self.channels[ch].is_started();
                 self.channels[ch].control = value & 0x00FF;
@@ -181,10 +192,10 @@ impl Timer {
     }
 
     /// For 32-bit writes, reload and control are written atomically.
-    /// Per the GBA docs, if the start bit transitions 0→1 in the same store that
+    /// Per the GBA docs, if the start bit transitions 0->1 in the same store that
     /// writes the reload value, the newly written reload is the initial counter.
     pub fn write_32(&mut self, addr: u32, value: u32) {
-        // Write reload first so that the control write (start 0→1) picks it up.
+        // Write reload first so that the control write (start 0->1) picks it up.
         self.write_16(addr, (value & 0xFFFF) as u16);
         self.write_16(addr + 2, (value >> 16) as u16);
     }
@@ -213,6 +224,9 @@ impl Timer {
         if self.channels[ch].irq_enabled() {
             signal_irq(&self.interrupt_flags, TIMER_IRQ[ch]);
         }
+
+        // Record the overflow so APU can clock DMA FIFOs
+        self.overflow_pending |= 1 << ch;
 
         self.channels[ch].counter = self.channels[ch].reload;
         let now = self.cycles;

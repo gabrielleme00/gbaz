@@ -294,7 +294,7 @@ impl Cpu {
     /// - In ARM mode, R15 is set to `exec_addr + 8` before the handler runs.
     /// - In Thumb mode, R15 is set to `exec_addr + 4` before the handler runs.
     /// - If the handler called `branch_to` the pipeline was already refilled;
-    ///   otherwise we advance it normally.
+    ///  otherwise we advance it normally.
     pub fn step(&mut self) -> u32 {
         // HALT mode: stall until IE & IF != 0 (independent of IME and I bit).
         if self.bus.borrow().io.borrow().halted {
@@ -390,7 +390,7 @@ impl Cpu {
     /// Extracts bits [27:20] and [7:4] to form the 12-bit ARM dispatch index.
     fn arm_index(raw: u32) -> usize {
         let hi = (raw >> 16) & 0xFF0; // bits 27-20 -> positions 11-4
-        let lo = (raw >> 4) & 0x00F; //  bits  7-4  -> positions  3-0
+        let lo = (raw >> 4) & 0x00F; // bits  7-4  -> positions  3-0
         (hi | lo) as usize
     }
 

@@ -63,7 +63,7 @@ impl IoDevices {
             use IoRegisterRegion::*;
             match region {
                 Lcd => self.ppu.read_8(addr),
-                Sound => 0,
+                Sound => self.apu.read_8(addr),
                 Dma => self.dma.read_8(addr),
                 Timer => self.timer.read_8(addr),
                 Keypad => self.input.read_8(addr),
@@ -84,10 +84,7 @@ impl IoDevices {
             use IoRegisterRegion::*;
             match region {
                 Lcd => self.ppu.read_16(addr),
-                Sound => match addr {
-                    0x0400_0088 => 0x200, // SOUNDBIAS
-                    _ => 0,
-                },
+                Sound => self.apu.read_16(addr),
                 Dma => self.dma.read_16(addr),
                 Timer => self.timer.read_16(addr),
                 Keypad => self.input.read_16(),
@@ -107,7 +104,7 @@ impl IoDevices {
             use IoRegisterRegion::*;
             match region {
                 Lcd => self.ppu.read_32(addr),
-                Sound => 0,
+                Sound => self.apu.read_32(addr),
                 Dma => self.dma.read_32(addr),
                 Timer => self.timer.read_32(addr),
                 Keypad => self.input.read_32(),
@@ -127,7 +124,7 @@ impl IoDevices {
             use IoRegisterRegion::*;
             match region {
                 Lcd => self.ppu.write_8(addr, value),
-                Sound => {}
+                Sound => self.apu.write_8(addr, value),
                 Dma => self.dma.write_8(addr, value),
                 Timer => self.timer.write_8(addr, value),
                 Keypad => {}
@@ -146,7 +143,7 @@ impl IoDevices {
             use IoRegisterRegion::*;
             match region {
                 Lcd => self.ppu.write_16(addr, value),
-                Sound => {}
+                Sound => self.apu.write_16(addr, value),
                 Dma => self.dma.write_16(addr, value),
                 Timer => self.timer.write_16(addr, value),
                 Keypad => {}
@@ -165,7 +162,7 @@ impl IoDevices {
             use IoRegisterRegion::*;
             match region {
                 Lcd => self.ppu.write_32(addr, value),
-                Sound => {}
+                Sound => self.apu.write_32(addr, value),
                 Dma => self.dma.write_32(addr, value),
                 Timer => self.timer.write_32(addr, value),
                 Keypad => {}
@@ -190,4 +187,28 @@ impl IoDevices {
     pub fn ws1_s(&self) -> u32 { WS1_CYCLES_S[self.waitcnt.ws1_s() as usize] }
     pub fn ws2_n(&self) -> u32 { WS2_CYCLES_N[self.waitcnt.ws2_n() as usize] }
     pub fn ws2_s(&self) -> u32 { WS2_CYCLES_S[self.waitcnt.ws2_s() as usize] }
+}
+
+impl IoDevices {
+    /// Advance all hardware by one CPU cycle. Called from `Bus::tick()`.
+    pub fn tick(&mut self) {
+        self.ppu.tick();
+        self.timer.advance(1);
+        // Notify APU of any timer overflows that just occurred.
+        let overflow_flags = self.timer.take_overflow_flags();
+        if overflow_flags != 0 {
+            for ch in 0..2usize {
+                if overflow_flags & (1 << ch) != 0 {
+                    self.apu.on_timer_overflow(ch);
+                }
+            }
+        }
+        self.apu.advance(1);
+    }
+
+    /// Returns and clears the DMA-refill request flags from the APU FIFOs
+    /// (bit 0 = FIFO A wants DMA, bit 1 = FIFO B).
+    pub fn take_sound_dma_flags(&mut self) -> u8 {
+        self.apu.take_fifo_dma_flags()
+    }
 }
