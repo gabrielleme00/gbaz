@@ -15,13 +15,13 @@ pub enum MemoryRegion {
     Vram,
     Oam,
     /// ROM wait-state window 0 (0x08000000–0x09FFFFFF)
-    CartridgeWs0,
+    CartWs0,
     /// ROM wait-state window 1 (0x0A000000–0x0BFFFFFF)
-    CartridgeWs1,
+    CartWs1,
     /// ROM wait-state window 2 (0x0C000000–0x0DFFFFFF)
-    CartridgeWs2,
+    CartWs2,
     /// SRAM / Flash save storage (0x0E000000–0x0E00FFFF, 8-bit bus)
-    CartridgeSram,
+    CartSram,
 }
 
 impl MemoryRegion {
@@ -37,10 +37,10 @@ impl MemoryRegion {
             0x0600_0000..=0x0601_FFFF => Some(Self::Vram),
             0x0700_0000..=0x0700_03FF => Some(Self::Oam),
             // External Memory (Game Pak) - three wait-state ROM windows plus SRAM
-            0x0800_0000..=0x09FF_FFFF => Some(Self::CartridgeWs0),
-            0x0A00_0000..=0x0BFF_FFFF => Some(Self::CartridgeWs1),
-            0x0C00_0000..=0x0DFF_FFFF => Some(Self::CartridgeWs2),
-            0x0E00_0000..=0x0E00_FFFF => Some(Self::CartridgeSram),
+            0x0800_0000..=0x09FF_FFFF => Some(Self::CartWs0),
+            0x0A00_0000..=0x0BFF_FFFF => Some(Self::CartWs1),
+            0x0C00_0000..=0x0DFF_FFFF => Some(Self::CartWs2),
+            0x0E00_0000..=0x0E00_FFFF => Some(Self::CartSram),
             _ => None,
         }
     }

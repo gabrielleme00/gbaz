@@ -14,6 +14,7 @@ pub use apu::Apu;
 pub use bus::Bus;
 pub use cartridge::Cartridge;
 pub use cpu::Cpu;
+pub use cpu::{disasm_arm, disasm_thumb};
 pub use dma::{Dma, DmaEvent, DmaRunParams};
 pub use input::{Button, InputState};
 pub use interrupt::InterruptController;
@@ -57,7 +58,6 @@ impl Emulator {
         if !has_bios {
             emu.skip_bios();
         }
-        emu.set_disasm_enabled(false);
         emu
     }
 
@@ -186,6 +186,39 @@ impl Emulator {
         self.cpu.reg(idx)
     }
 
+    /// Returns the current CPSR value.
+    pub fn cpsr(&self) -> u32 {
+        self.cpu.cpsr()
+    }
+
+    /// Returns true if the CPU is in Thumb mode.
+    pub fn is_thumb_mode(&self) -> bool {
+        self.cpu.is_thumb_mode()
+    }
+
+    /// Disassembles `count` instructions starting at `addr`, reading from the bus.
+    /// Returns a Vec of (address, raw_bits, mnemonic_string).
+    pub fn disassemble(&self, addr: u32, count: usize) -> Vec<(u32, u32, String)> {
+        let bus = self.bus.borrow();
+        let thumb = self.cpu.is_thumb_mode();
+        let mut pc = addr;
+        let mut out = Vec::with_capacity(count);
+        for _ in 0..count {
+            if thumb {
+                let raw = bus.read_16(pc) as u32;
+                let s = disasm_thumb(pc, raw as u16);
+                out.push((pc, raw, s));
+                pc = pc.wrapping_add(2);
+            } else {
+                let raw = bus.read_32(pc);
+                let s = disasm_arm(pc, raw);
+                out.push((pc, raw, s));
+                pc = pc.wrapping_add(4);
+            }
+        }
+        out
+    }
+
     /// Returns the completed framebuffer (BGR555, 240×160 row-major) from the last finished frame.
     pub fn framebuffer(&self) -> Ref<'_, [u32]> {
         Ref::map(self.io_devs.borrow(), |io| io.ppu.get_frame_buffer())
@@ -194,6 +227,24 @@ impl Emulator {
     /// Updates the button state seen by KEYINPUT (0x0400_0130).
     pub fn set_input(&mut self, input: InputState) {
         self.io_devs.borrow_mut().input = input;
+    }
+
+    /// Returns the raw save-backup bytes for the loaded cartridge, if any.
+    pub fn save_data(&self) -> Option<Vec<u8>> {
+        self.bus.borrow().cartridge_save_data()
+    }
+
+    /// Restores backup storage from previously-persisted save bytes.
+    pub fn load_save(&mut self, data: &[u8]) {
+        self.bus.borrow_mut().load_cartridge_save(data);
+    }
+
+    pub fn is_save_dirty(&self) -> bool {
+        self.bus.borrow().is_save_dirty()
+    }
+
+    pub fn clear_save_dirty(&mut self) {
+        self.bus.borrow_mut().clear_save_dirty();
     }
 
     /// Configures the APU output sample rate to match the audio backend.
@@ -206,9 +257,9 @@ impl Emulator {
         self.io_devs.borrow_mut().apu.drain_samples(buf);
     }
 
-    /// Enables or disables CPU disassembly output.
-    pub fn set_disasm_enabled(&mut self, enabled: bool) {
-        self.cpu.set_disasm_enabled(enabled);
+    /// Reads a single byte from the bus at `addr` without side-effects.
+    pub fn read_byte(&self, addr: u32) -> u8 {
+        self.bus.borrow().read_8(addr)
     }
 
     pub fn reset(&mut self) {

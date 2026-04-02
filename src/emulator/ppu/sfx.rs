@@ -1,6 +1,4 @@
-use super::layer::*;
-use super::regs::*;
-use super::*;
+use super::{layer::*, regs::*, *};
 use std::cmp;
 
 impl Rgb15 {
@@ -13,7 +11,10 @@ impl Rgb15 {
 }
 
 /// Fills a stack buffer with the subset of `backgrounds` enabled by `window_flags`.
-fn filter_window_backgrounds(backgrounds: &[usize], window_flags: WindowFlags) -> ([usize; 4], usize) {
+fn filter_window_backgrounds(
+    backgrounds: &[usize],
+    window_flags: WindowFlags,
+) -> ([usize; 4], usize) {
     let mut buf = [0usize; 4];
     let mut len = 0;
     for &bg in backgrounds {
@@ -26,19 +27,6 @@ fn filter_window_backgrounds(backgrounds: &[usize], window_flags: WindowFlags) -
 }
 
 impl Ppu {
-    #[allow(unused)]
-    fn layer_to_pixel(&mut self, x: usize, layer: &RenderLayer) -> Rgb15 {
-        use RenderLayerKind::*;
-        match layer.kind {
-            Background0 => self.bg_line[0][x],
-            Background1 => self.bg_line[1][x],
-            Background2 => self.bg_line[2][x],
-            Background3 => self.bg_line[3][x],
-            Objects => self.obj_buffer_get(x).color,
-            Backdrop => Rgb15(self.pram_read_16(0)),
-        }
-    }
-
     /// Composes the render layers into a final scanline while applying needed special effects,
     /// and render it to the frame buffer.
     pub fn finalize_scanline(&mut self, bg_start: usize, bg_end: usize) {
@@ -121,7 +109,8 @@ impl Ppu {
                 return;
             }
             let win_out = WindowInfo::new(WindowType::WinOut, self.winout_flags);
-            let (win_out_bg_buf, win_out_bg_len) = filter_window_backgrounds(sorted_backgrounds, win_out.flags);
+            let (win_out_bg_buf, win_out_bg_len) =
+                filter_window_backgrounds(sorted_backgrounds, win_out.flags);
             let win_out_backgrounds = &win_out_bg_buf[..win_out_bg_len];
             if self.dispcnt.obj_win_enable() {
                 let win_obj = WindowInfo::new(WindowType::WinObj, self.winobj_flags);
@@ -132,8 +121,8 @@ impl Ppu {
                     if *is_occupied {
                         continue;
                     }
-                    let obj_entry = self.obj_buffer_get(x);
-                    if obj_entry.window {
+                    let obj = self.obj_buffer_get(x);
+                    if obj.window {
                         // WinObj
                         output[x] = self
                             .finalize_pixel(x, &win_obj, win_obj_backgrounds, backdrop_color)
@@ -166,30 +155,29 @@ impl Ppu {
         backgrounds: &[usize],
         backdrop_color: Rgb15,
     ) -> Rgb15 {
+        use BlendMode::*;
+
         // The backdrop layer is the default
         let backdrop_layer = RenderLayer::backdrop(backdrop_color);
 
-        // Backgrounds are already sorted
-        // lets start by taking the first 2 backgrounds that have an opaque pixel at x
-        let mut it = backgrounds
-            .iter()
-            .filter(|i| self.bg_line[**i][x].is_opaque())
-            .take(2);
+        // Backgrounds are already sorted, so we just need to take the first 2
+        // that have an opaque pixel at x
+        let is_opaque = |bg: usize| self.bg_line[bg][x].is_opaque();
+        let mut it = backgrounds.iter().filter(|i| is_opaque(**i)).take(2);
 
-        let mut top_layer = it.next().map_or(backdrop_layer, |bg| {
-            RenderLayer::background(*bg, self.bg_line[*bg][x], self.bgcnt[*bg].priority())
-        });
-
-        let mut bot_layer = it.next().map_or(backdrop_layer, |bg| {
-            RenderLayer::background(*bg, self.bg_line[*bg][x], self.bgcnt[*bg].priority())
-        });
+        // If there are no opaque backgrounds, the top layer is the backdrop and
+        // the bottom layer is also the backdrop (for blending purposes)
+        let build_bg = |bg| self.layer_from_bg(bg, x);
+        let mut top_layer = it.next().map_or(backdrop_layer, |bg| build_bg(*bg));
+        let mut bot_layer = it.next().map_or(backdrop_layer, |bg| build_bg(*bg));
 
         drop(it);
 
-        // Now that backgrounds are taken care of, we need to check if there is an object pixel that takes priority of one of the layers
-        let obj_entry = self.obj_buffer_get(x);
-        if win.flags.obj_enabled() && self.dispcnt.obj_enable() && obj_entry.color.is_opaque() {
-            let obj_layer = RenderLayer::objects(obj_entry.color, obj_entry.priority);
+        // Now that backgrounds are taken care of, we need to check if there is
+        // an object pixel that takes priority of one of the layers
+        let obj = self.obj_buffer_get(x);
+        if win.flags.obj_enabled() && self.dispcnt.obj_enable() && obj.color.is_opaque() {
+            let obj_layer = self.layer_from_obj(&obj);
             if obj_layer.priority <= top_layer.priority {
                 bot_layer = top_layer;
                 top_layer = obj_layer;
@@ -198,32 +186,52 @@ impl Ppu {
             }
         }
 
+        // With the final top and bottom layers determined, we can now apply
+        // special effects if needed
         let (top_flags, bot_flags) = (self.bldcnt.target1, self.bldcnt.target2);
 
-        let sfx_enabled =
-            self.bldcnt.mode != BlendMode::BldNone && top_flags.contains_render_layer(&top_layer);
+        // SFX is applied if the top layer is in the target layers and the mode
+        // is not BldNone
+        let top_sfx = self.bldcnt.mode != BldNone && top_flags.contains_render_layer(&top_layer);
 
-        if top_layer.is_object() && obj_entry.alpha && bot_flags.contains_render_layer(&bot_layer) {
+        if top_layer.is_object() && obj.alpha && bot_flags.contains_render_layer(&bot_layer) {
+            // Object pixel with alpha enabled: alpha blend the top and bottom
+            // layers regardless of mode.
             self.do_alpha(top_layer.pixel, bot_layer.pixel)
-        } else if win.flags.sfx_enabled() && sfx_enabled {
+        } else if win.flags.sfx_enabled() && top_sfx {
+            // The top layer is eligible for special effects, so apply the
+            // selected effect if the bottom layer is also in the target layers.
             let (top_layer, bot_layer) = (top_layer, bot_layer);
             match self.bldcnt.mode {
-                BlendMode::BldAlpha => {
+                BldAlpha => {
                     if bot_flags.contains_render_layer(&bot_layer) {
+                        // Both layers are in target layers, so apply alpha
+                        // blending with the specified coefficients
                         self.do_alpha(top_layer.pixel, bot_layer.pixel)
                     } else {
-                        // alpha blending must have a 2nd target
+                        // Bottom layer is not in target layers, so just return
+                        // the top layer's pixel
                         top_layer.pixel
                     }
                 }
-                BlendMode::BldWhite => self.do_brighten(top_layer.pixel),
-                BlendMode::BldBlack => self.do_darken(top_layer.pixel),
-                BlendMode::BldNone => top_layer.pixel,
+                BldWhite => self.do_brighten(top_layer.pixel),
+                BldBlack => self.do_darken(top_layer.pixel),
+                BldNone => top_layer.pixel,
             }
         } else {
-            // no blending, just use the top pixel
+            // No special effects, so just return the top layer's pixel
             top_layer.pixel
         }
+    }
+
+    #[inline]
+    fn layer_from_bg(&self, bg: usize, x: usize) -> RenderLayer {
+        RenderLayer::background(bg, self.bg_line[bg][x], self.bgcnt[bg].priority())
+    }
+
+    #[inline]
+    fn layer_from_obj(&self, obj: &ObjBufferEntry) -> RenderLayer {
+        RenderLayer::objects(obj.color, obj.priority)
     }
 
     #[inline]

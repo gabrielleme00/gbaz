@@ -13,12 +13,16 @@ pub struct EmulatorState {
     pub running: bool,
     pub error_message: Option<String>,
     pub bios_path: Option<PathBuf>,
+    pub rom_path: Option<PathBuf>,
     pub audio: Option<AudioBackend>,
     pub audio_debug: bool,
+    pub cpu_debug: bool,
+    pub mem_debug: bool,
 
     timing_anchor: Option<Instant>,
     frame_accumulator: f64,
     audio_samples: Vec<f32>,
+    save_frame_counter: u32,
 }
 
 impl EmulatorState {
@@ -44,11 +48,15 @@ impl EmulatorState {
             running,
             error_message: None,
             bios_path,
+            rom_path: None,
             audio,
             audio_debug: false,
+            cpu_debug: false,
+            mem_debug: false,
             timing_anchor: None,
             frame_accumulator: 0.0,
             audio_samples: Vec::new(),
+            save_frame_counter: 0,
         }
     }
 
@@ -63,6 +71,34 @@ impl EmulatorState {
         self.running = true;
         self.error_message = None;
         self.reset_timing();
+        self.load_save();
+    }
+
+    /// Set the path of the currently loaded ROM (used to derive the .sav path).
+    pub fn set_rom_path(&mut self, path: PathBuf) {
+        self.rom_path = Some(path);
+    }
+
+    /// Try to load save data from the .sav file that sits next to the ROM.
+    pub fn load_save(&mut self) {
+        let Some(path) = self.rom_path.as_ref().map(|p| p.with_extension("sav")) else { return };
+        let Ok(data) = std::fs::read(&path) else { return };
+        if let Some(emu) = &mut self.emulator {
+            emu.load_save(&data);
+        }
+    }
+
+    /// Write the backup storage to disk if it has been modified since the last flush.
+    pub fn flush_save(&mut self) {
+        let Some(path) = self.rom_path.as_ref().map(|p| p.with_extension("sav")) else { return };
+        let Some(emu) = &mut self.emulator else { return };
+        if !emu.is_save_dirty() { return; }
+        let Some(data) = emu.save_data() else { return };
+        if let Err(e) = std::fs::write(&path, &data) {
+            eprintln!("Failed to write save file '{}': {e}", path.display());
+        } else {
+            emu.clear_save_dirty();
+        }
     }
 
     pub fn toggle_pause(&mut self) {
@@ -80,6 +116,39 @@ impl EmulatorState {
         if let Some(emu) = &mut self.emulator {
             emu.set_input(input);
         }
+    }
+
+    pub fn volume(&self) -> f32 {
+        self.audio
+            .as_ref()
+            .map(|a| a.controls().volume())
+            .unwrap_or(1.0)
+    }
+
+    pub fn set_volume(&self, volume: f32) {
+        if let Some(a) = &self.audio {
+            a.controls().set_volume(volume);
+        }
+    }
+
+    pub fn muted(&self) -> bool {
+        self.audio
+            .as_ref()
+            .map(|a| a.controls().muted())
+            .unwrap_or(false)
+    }
+
+    pub fn set_muted(&self, muted: bool) {
+        if let Some(a) = &self.audio {
+            a.controls().set_muted(muted);
+        }
+    }
+
+    /// Executes a single CPU instruction (used by the debugger Step button).
+    /// Pauses emulation while stepping.
+    pub fn step_instruction(&mut self) {
+        let Some(emu) = &mut self.emulator else { return };
+        emu.step();
     }
 
     /// Returns a snapshot of audio pipeline health for the debug overlay.
@@ -138,6 +207,14 @@ impl EmulatorState {
                     audio.push_samples(&self.audio_samples);
                 }
             }
+        }
+
+        // Auto-save: flush dirty backup storage to disk every ~5 seconds.
+        const SAVE_INTERVAL_FRAMES: u32 = 300;
+        self.save_frame_counter += frames as u32;
+        if self.save_frame_counter >= SAVE_INTERVAL_FRAMES {
+            self.save_frame_counter = 0;
+            self.flush_save();
         }
     }
 

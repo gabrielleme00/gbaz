@@ -1,6 +1,6 @@
 /// Channel 4 - Noise output using a linear feedback shift register (LFSR).
 pub struct NoiseChannel {
-    // ── Latched register fields ──────────────────────────────────────────────
+    // Latched register fields
     pub length_load: u8,    // bits 5-0 of NR41 (length = 64 - n)
     pub env_initial: u8,    // bits 15-12 of NR42
     pub env_increase: bool, // bit 11 of NR42
@@ -10,7 +10,7 @@ pub struct NoiseChannel {
     pub shift_freq: u8,     // bits 7-4 of NR43 (s; 0-15)
     pub length_enable: bool,// bit 14 of NR44
 
-    // ── Runtime state ────────────────────────────────────────────────────────
+    // Runtime state
     pub enabled: bool,
     length_counter: u16,
     volume: u8,

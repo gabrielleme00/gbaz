@@ -9,7 +9,7 @@ const DUTY_TABLE: [[bool; 8]; 4] = [
 
 /// Shared square-wave channel for CH1 and CH2.
 pub struct SquareChannel {
-    // ── Latched register fields ──────────────────────────────────────────────
+    // Latched register fields
     pub duty: u8,           // bits 7-6 of NRx1 (0-3)
     pub length_load: u8,    // bits 5-0 of NRx1 (reload for length counter = 64 - n)
     pub env_initial: u8,    // bits 15-12 of NRx2 (0-15)
@@ -18,7 +18,7 @@ pub struct SquareChannel {
     pub freq: u16,          // bits 10-0 of NRx3+NRx4 (11-bit)
     pub length_enable: bool,// bit 14 of NRx4
 
-    // ── Runtime state ────────────────────────────────────────────────────────
+    // Runtime state
     pub enabled: bool,
     length_counter: u16,    // counts down; channel off when it reaches 0
     volume: u8,             // current envelope volume 0-15

@@ -1,6 +1,7 @@
 pub mod regions;
 
 use super::{Cartridge, IoDevices};
+use MemoryRegion::*;
 use regions::{MemoryRegion, consts::*};
 use std::{cell::Cell, cell::RefCell, rc::Rc};
 
@@ -17,7 +18,7 @@ pub struct Bus {
     iwram: [u8; IWRAM_SIZE],
     pub io: Rc<RefCell<IoDevices>>,
     cartridge: Cartridge,
-    last_addr: Cell<u32>, // For timing calculations of sequential accesses
+    last_addr: Cell<u32>,
 }
 
 impl Bus {
@@ -55,27 +56,33 @@ impl Bus {
     pub fn read_8(&self, addr: u32) -> u8 {
         if let Some(region) = MemoryRegion::from_addr(addr) {
             match region {
-                MemoryRegion::Bios => self.bios.get(addr as usize).copied().unwrap_or(0xFF),
-                MemoryRegion::Ewram => self.ewram[Self::ewram_index(addr)],
-                MemoryRegion::Iwram => self.iwram[Self::iwram_index(addr)],
-                MemoryRegion::Io => self.io.borrow().read_8(addr),
+                Bios => self.bios.get(addr as usize).copied().unwrap_or(0xFF),
+                Ewram => self.ewram[Self::ewram_index(addr)],
+                Iwram => self.iwram[Self::iwram_index(addr)],
+                Io => self.io.borrow().read_8(addr),
                 // PRAM/VRAM/OAM are 16-bit. Read 16 and pick the byte.
-                MemoryRegion::Vram | MemoryRegion::Pram | MemoryRegion::Oam => {
+                Vram | Pram | Oam => {
                     let val = self.read_16(addr & !1);
-                    if addr & 1 == 0 { (val & 0xFF) as u8 } else { (val >> 8) as u8 }
+                    if addr & 1 == 0 {
+                        (val & 0xFF) as u8
+                    } else {
+                        (val >> 8) as u8
+                    }
                 }
-                _ => self.cartridge.read_8(addr),
+                CartWs0 | CartWs1 | CartWs2 | CartSram => self.cartridge.read_8(addr),
             }
-        } else { 0 }
+        } else {
+            0
+        }
     }
 
     pub fn write_8(&mut self, addr: u32, value: u8) {
         if let Some(region) = MemoryRegion::from_addr(addr) {
             match region {
-                MemoryRegion::Bios => {} 
-                MemoryRegion::Ewram => self.ewram[Self::ewram_index(addr)] = value,
-                MemoryRegion::Iwram => self.iwram[Self::iwram_index(addr)] = value,
-                MemoryRegion::Vram => {
+                Bios => {}
+                Ewram => self.ewram[Self::ewram_index(addr)] = value,
+                Iwram => self.iwram[Self::iwram_index(addr)] = value,
+                Vram => {
                     // Hardware quirk: 8-bit writes to BG VRAM expand the byte to both halves of
                     // the aligned 16-bit word. 8-bit writes to OBJ VRAM are ignored.
                     let ofs = Self::vram_index(addr);
@@ -83,16 +90,17 @@ impl Bus {
                         let expanded = (value as u16) | ((value as u16) << 8);
                         self.io.borrow_mut().ppu.vram_write_16(ofs & !1, expanded);
                     }
-                },
-                MemoryRegion::Oam => { /* 8-bit OAM writes are ignored on GBA hardware */ },
-                MemoryRegion::Pram => {
+                }
+                Oam => { /* 8-bit OAM writes are ignored on GBA hardware */ }
+                Pram => {
                     // Hardware quirk: 8-bit writes to PRAM replicate the byte to both halves of the 16-bit entry.
-                    self.io.borrow_mut().ppu.pram_write_16(Self::pram_index(addr), value as u16 | ((value as u16) << 8));
-                },
-                MemoryRegion::Io => self.io.borrow_mut().write_8(addr, value),
-                MemoryRegion::CartridgeWs0 | MemoryRegion::CartridgeWs1 | MemoryRegion::CartridgeWs2 
-                    => self.cartridge.write_8(addr, value),
-                _ => {}
+                    self.io.borrow_mut().ppu.pram_write_16(
+                        Self::pram_index(addr),
+                        value as u16 | ((value as u16) << 8),
+                    );
+                }
+                Io => self.io.borrow_mut().write_8(addr, value),
+                CartWs0 | CartWs1 | CartWs2 | CartSram => self.cartridge.write_8(addr, value),
             }
         }
     }
@@ -102,51 +110,57 @@ impl Bus {
         let addr = addr & !1;
         if let Some(region) = MemoryRegion::from_addr(addr) {
             match region {
-                MemoryRegion::Ewram => {
+                Bios => {
+                    self.bios.get(addr as usize).copied().unwrap_or(0xFF) as u16
+                        | ((self.bios.get(addr as usize + 1).copied().unwrap_or(0xFF) as u16) << 8)
+                }
+                Ewram => {
                     let idx = Self::ewram_index(addr);
-                    u16::from_le_bytes(self.ewram[idx..idx+2].try_into().unwrap())
+                    u16::from_le_bytes(self.ewram[idx..idx + 2].try_into().unwrap())
                 }
-                MemoryRegion::Iwram => {
+                Iwram => {
                     let idx = Self::iwram_index(addr);
-                    u16::from_le_bytes(self.iwram[idx..idx+2].try_into().unwrap())
+                    u16::from_le_bytes(self.iwram[idx..idx + 2].try_into().unwrap())
                 }
-                MemoryRegion::Pram => self.io.borrow().ppu.pram_read_16(Self::pram_index(addr)),
-                MemoryRegion::Vram => self.io.borrow().ppu.vram_read_16(Self::vram_index(addr)),
-                MemoryRegion::Io => self.io.borrow().read_16(addr),
-                MemoryRegion::Oam => self.io.borrow().ppu.oam_read_16(addr),
-                _ => {
-                    let low = self.read_8(addr) as u16;
-                    let high = self.read_8(addr + 1) as u16;
-                    (high << 8) | low
-                }
+                Pram => self.io.borrow().ppu.pram_read_16(Self::pram_index(addr)),
+                Vram => self.io.borrow().ppu.vram_read_16(Self::vram_index(addr)),
+                Io => self.io.borrow().read_16(addr),
+                Oam => self.io.borrow().ppu.oam_read_16(addr),
+                CartWs0 | CartWs1 | CartWs2 | CartSram => self.cartridge.read_16(addr),
             }
-        } else { 0 }
+        } else {
+            0
+        }
     }
 
     pub fn write_16(&mut self, addr: u32, value: u16) {
         let addr = addr & !1;
         if let Some(region) = MemoryRegion::from_addr(addr) {
             match region {
-                MemoryRegion::Ewram => {
+                Bios => {}
+                Ewram => {
                     let idx = Self::ewram_index(addr);
-                    self.ewram[idx..idx+2].copy_from_slice(&value.to_le_bytes());
+                    self.ewram[idx..idx + 2].copy_from_slice(&value.to_le_bytes());
                 }
-                MemoryRegion::Iwram => {
+                Iwram => {
                     let idx = Self::iwram_index(addr);
-                    self.iwram[idx..idx+2].copy_from_slice(&value.to_le_bytes());
+                    self.iwram[idx..idx + 2].copy_from_slice(&value.to_le_bytes());
                 }
-                MemoryRegion::Pram => {
-                    self.io.borrow_mut().ppu.pram_write_16(Self::pram_index(addr), value);
+                Pram => {
+                    self.io
+                        .borrow_mut()
+                        .ppu
+                        .pram_write_16(Self::pram_index(addr), value);
                 }
-                MemoryRegion::Vram => {
-                    self.io.borrow_mut().ppu.vram_write_16(Self::vram_index(addr), value);
+                Vram => {
+                    self.io
+                        .borrow_mut()
+                        .ppu
+                        .vram_write_16(Self::vram_index(addr), value);
                 }
-                MemoryRegion::Io => self.io.borrow_mut().write_16(addr, value),
-                MemoryRegion::Oam => self.io.borrow_mut().ppu.oam_write_16(addr, value),
-                _ => {
-                    self.write_8(addr, (value & 0xFF) as u8);
-                    self.write_8(addr + 1, (value >> 8) as u8);
-                }
+                Io => self.io.borrow_mut().write_16(addr, value),
+                Oam => self.io.borrow_mut().ppu.oam_write_16(addr, value),
+                CartWs0 | CartWs1 | CartWs2 | CartSram => self.cartridge.write_16(addr, value),
             }
         }
     }
@@ -155,14 +169,15 @@ impl Bus {
         let addr = addr & !3;
         if let Some(region) = MemoryRegion::from_addr(addr) {
             match region {
-                MemoryRegion::Ewram => {
+                Ewram => {
                     let idx = Self::ewram_index(addr);
                     return u32::from_le_bytes(self.ewram[idx..idx + 4].try_into().unwrap());
                 }
-                MemoryRegion::Iwram => {
+                Iwram => {
                     let idx = Self::iwram_index(addr);
                     return u32::from_le_bytes(self.iwram[idx..idx + 4].try_into().unwrap());
                 }
+                CartWs0 | CartWs1 | CartWs2 | CartSram => return self.cartridge.read_32(addr),
                 _ => {}
             }
         }
@@ -175,15 +190,18 @@ impl Bus {
         let addr = addr & !3;
         if let Some(region) = MemoryRegion::from_addr(addr) {
             match region {
-                MemoryRegion::Ewram => {
+                Ewram => {
                     let idx = Self::ewram_index(addr);
                     self.ewram[idx..idx + 4].copy_from_slice(&value.to_le_bytes());
                     return;
                 }
-                MemoryRegion::Iwram => {
+                Iwram => {
                     let idx = Self::iwram_index(addr);
                     self.iwram[idx..idx + 4].copy_from_slice(&value.to_le_bytes());
                     return;
+                }
+                CartWs0 | CartWs1 | CartWs2 | CartSram => {
+                    return self.cartridge.write_32(addr, value);
                 }
                 _ => {}
             }
@@ -196,10 +214,25 @@ impl Bus {
         self.cartridge.size()
     }
 
+    pub fn cartridge_save_data(&self) -> Option<Vec<u8>> {
+        self.cartridge.save_data()
+    }
+
+    pub fn load_cartridge_save(&mut self, data: &[u8]) {
+        self.cartridge.load_save_data(data);
+    }
+
+    pub fn is_save_dirty(&self) -> bool {
+        self.cartridge.is_save_dirty()
+    }
+
+    pub fn clear_save_dirty(&mut self) {
+        self.cartridge.clear_save_dirty();
+    }
+
     /// Sequential (S) cycle count for a memory access at `addr` with `width`.
     fn seq_cycles(&self, addr: u32, width: AccessWidth) -> u32 {
         use AccessWidth::*;
-        use MemoryRegion::*;
         match MemoryRegion::from_addr(addr) {
             // 32-bit internal buses: 1 cycle regardless of width.
             Some(Bios) | Some(Iwram) | Some(Io) | Some(Oam) => 1,
@@ -215,21 +248,21 @@ impl Bus {
                 }
             }
             // Cartridge ROM windows: 16-bit bus; Word = S + S.
-            Some(CartridgeWs0) => {
+            Some(CartWs0) => {
                 let s = self.io.borrow().ws0_s();
                 if width == Word { s + s } else { s }
             }
-            Some(CartridgeWs1) => {
+            Some(CartWs1) => {
                 let s = self.io.borrow().ws1_s();
                 if width == Word { s + s } else { s }
             }
-            Some(CartridgeWs2) => {
+            Some(CartWs2) => {
                 let s = self.io.borrow().ws2_s();
                 if width == Word { s + s } else { s }
             }
             // SRAM: 8-bit bus; timing is the same for all widths (hardware does
             // multiple byte accesses, but games always use byte instructions).
-            Some(CartridgeSram) => self.io.borrow().sram_cycles(),
+            Some(CartSram) => self.io.borrow().sram_cycles(),
             None => 1,
         }
     }
@@ -239,7 +272,6 @@ impl Bus {
     /// For 32-bit accesses on 16-bit buses the first half is N and the second is S.
     fn nonseq_cycles(&self, addr: u32, width: AccessWidth) -> u32 {
         use AccessWidth::*;
-        use MemoryRegion::*;
         match MemoryRegion::from_addr(addr) {
             Some(Bios) | Some(Iwram) | Some(Io) | Some(Oam) => 1,
             Some(Pram) | Some(Vram) => 1,
@@ -251,19 +283,19 @@ impl Bus {
                     6
                 }
             }
-            Some(CartridgeWs0) => {
+            Some(CartWs0) => {
                 let (n, s) = (self.io.borrow().ws0_n(), self.io.borrow().ws0_s());
                 if width == Word { n + s } else { n }
             }
-            Some(CartridgeWs1) => {
+            Some(CartWs1) => {
                 let (n, s) = (self.io.borrow().ws1_n(), self.io.borrow().ws1_s());
                 if width == Word { n + s } else { n }
             }
-            Some(CartridgeWs2) => {
+            Some(CartWs2) => {
                 let (n, s) = (self.io.borrow().ws2_n(), self.io.borrow().ws2_s());
                 if width == Word { n + s } else { n }
             }
-            Some(CartridgeSram) => self.io.borrow().sram_cycles(),
+            Some(CartSram) => self.io.borrow().sram_cycles(),
             None => 1,
         }
     }

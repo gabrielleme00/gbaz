@@ -90,7 +90,6 @@ impl Ppu {
         let mut start_tile_x = bg_x % 8;
         let tile_py = bg_y % 8;
 
-        #[allow(unused)]
         macro_rules! render_loop {
             ($read_pixel_index:ident) => {
                 loop {

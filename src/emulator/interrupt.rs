@@ -71,7 +71,7 @@ impl InterruptController {
         match addr {
             0x0400_0200 => self.enable = value,
             // IF is write-1-to-clear: writing a 1 acknowledges (clears) that interrupt bit.
-            0x0400_0202 => *self.flag.borrow_mut() &= !(value & 0x00FF),
+            0x0400_0202 => *self.flag.borrow_mut() &= !value,
             0x0400_0208 => self.master_enable = value != 0,
             _ => {}
         }

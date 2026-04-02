@@ -132,6 +132,7 @@ impl IoDevices {
                 Interrupt => match addr {
                     0x0400_0204 => set_lo(&mut self.waitcnt.0, value),
                     0x0400_0205 => set_hi(&mut self.waitcnt.0, value),
+                    0x0400_0301 => self.halted = true,
                     _ => self.interrupt.write_8(addr, value),
                 },
             }

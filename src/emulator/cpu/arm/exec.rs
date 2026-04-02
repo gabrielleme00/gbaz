@@ -104,8 +104,7 @@ pub mod handlers {
             }
 
             if loaded_pc {
-                let new_pc = cpu.reg(REG_PC) & !3; // Ensure PC is word-aligned
-                cpu.branch_to(new_pc);
+                cpu.branch_to(cpu.reg(REG_PC));
             }
         } else {
             // STM

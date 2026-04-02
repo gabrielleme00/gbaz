@@ -1,6 +1,6 @@
 /// Channel 3 - Wave output, playing 4-bit samples from Wave RAM.
 pub struct WaveChannel {
-    // ── Latched register fields ──────────────────────────────────────────────
+    // Latched register fields
     pub two_banks: bool,     // NR30 bit 5: 0=one bank/32 samples, 1=two banks/64 samples
     pub bank_select: u8,     // NR30 bit 6: which bank plays (0 or 1)
     pub dac_on: bool,        // NR30 bit 7: 0=off, 1=playback
@@ -10,7 +10,7 @@ pub struct WaveChannel {
     pub freq: u16,           // bits 10-0 of NR33+NR34
     pub length_enable: bool, // bit 14 of NR34
 
-    // ── Runtime state ────────────────────────────────────────────────────────
+    // Runtime state
     pub enabled: bool,
     pub wave_ram: [[u8; 16]; 2], // 2 banks × 16 bytes (each byte = two 4-bit samples)
     wave_pos: u8,           // sample position within the playing bank (0-31) or (0-63)
@@ -119,7 +119,7 @@ impl WaveChannel {
         (shifted / 7.5 - 1.0).clamp(-1.0, 1.0)
     }
 
-    // ── Wave RAM access (user sees the bank NOT currently playing) ───────────
+    // Wave RAM access (user sees the bank NOT currently playing)
 
     pub fn read_wave_byte(&self, offset: usize) -> u8 {
         let bank = (self.bank_select ^ 1) as usize;

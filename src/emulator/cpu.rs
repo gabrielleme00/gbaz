@@ -6,8 +6,11 @@ use std::{cell::RefCell, rc::Rc};
 
 use super::bus::{AccessWidth, Bus};
 
-use arm::{ArmHandler, disasm_arm, generate_arm_table};
-use thumb::{ThumbHandler, disasm_thumb, generate_thumb_table};
+use arm::{ArmHandler, generate_arm_table};
+use thumb::{ThumbHandler, generate_thumb_table};
+
+pub use arm::disasm_arm;
+pub use thumb::disasm_thumb;
 
 // CPSR flag bit positions
 const FLAG_N: u32 = 1 << 31;
@@ -106,8 +109,6 @@ pub struct Cpu {
     arm_table: Box<[ArmHandler]>,
     /// Decode-table of Thumb instruction handlers (indexed by 10-bit key).
     thumb_table: Box<[ThumbHandler]>,
-    /// When `true`, each executed instruction is disassembled and printed to stderr.
-    disasm_enabled: bool,
 }
 
 impl Cpu {
@@ -134,13 +135,7 @@ impl Cpu {
             pending_fetch_cycles: 0,
             arm_table: Box::new(generate_arm_table()),
             thumb_table: Box::new(generate_thumb_table()),
-            disasm_enabled: false,
         }
-    }
-
-    /// Enables or disables per-instruction disassembly output on stderr.
-    pub fn set_disasm_enabled(&mut self, enabled: bool) {
-        self.disasm_enabled = enabled;
     }
 
     /// Resets all CPU state and fills the pipeline to a pure boot state
@@ -307,28 +302,24 @@ impl Cpu {
         }
 
         // Sample IRQ between instructions (I bit clear = IRQs enabled).
-        if self.cpsr & IRQ_DISABLE_BIT == 0 && self.bus.borrow().io.borrow().interrupt.irq_pending()
-        {
+        if self.is_irq_enabled() && self.bus.borrow().io.borrow().interrupt.irq_pending() {
             return self.enter_irq();
         }
 
         let exec = self.arm_pipe[0];
         let thumb_mode = self.is_thumb_mode();
 
-        if self.disasm_enabled {
-            let instr = if thumb_mode {
-                format!("{}", disasm_thumb(exec.addr, exec.raw as u16))
-            } else {
-                format!("{}", disasm_arm(exec.addr, exec.raw))
-            };
-            println!("{:08X?} | {} | {}", self.regs, self.flags_to_string(), instr);
-        }
+        // For debugging: disassemble and print the instruction about to execute.
+        // if (exec.addr > 0x080007a0 && exec.addr < 0x080007bc) || (exec.addr > 0x0800082b && exec.addr < 0x08000846) {
+        //     let instr = if thumb_mode {
+        //         format!("{}", disasm_thumb(exec.addr, exec.raw as u16))
+        //     } else {
+        //         format!("{}", disasm_arm(exec.addr, exec.raw))
+        //     };
+        //     println!("{:08X?} | {} | {}", self.regs, self._flags_to_string(), instr);
+        // }
 
-        self.regs[REG_PC] = if thumb_mode {
-            exec.addr.wrapping_add(4)
-        } else {
-            exec.addr.wrapping_add(8)
-        };
+        self.regs[REG_PC] = exec.addr.wrapping_add(if thumb_mode { 4 } else { 8 });
         self.pipeline_flushed = false;
 
         let handler_cycles = if thumb_mode {
@@ -358,6 +349,11 @@ impl Cpu {
     }
 
     // Helpers
+
+    /// Returns `true` if the I bit in CPSR is clear, indicating that maskable IRQs are enabled.
+    fn is_irq_enabled(&self) -> bool {
+        (self.cpsr & IRQ_DISABLE_BIT) == 0
+    }
 
     /// Evaluates the 4-bit condition field of an ARM instruction against CPSR.
     /// Returns `true` if the instruction should execute.
@@ -590,7 +586,7 @@ impl Cpu {
         (self.cpsr & FLAG_V) != 0
     }
 
-    fn flags_to_string(&self) -> String {
+    fn _flags_to_string(&self) -> String {
         let n = if (self.cpsr & FLAG_N) != 0 { 'N' } else { 'n' };
         let z = if (self.cpsr & FLAG_Z) != 0 { 'Z' } else { 'z' };
         let c = if (self.cpsr & FLAG_C) != 0 { 'C' } else { 'c' };
